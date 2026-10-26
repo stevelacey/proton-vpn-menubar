@@ -1,0 +1,14 @@
+#!/bin/bash
+# Builds Proton VPN Menu Bar.app, installs it to ~/Applications and starts it at login.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+./build >/dev/null
+pkill -x ProtonVPNMenuBar || true
+mkdir -p ~/Applications
+rm -rf ~/Applications/"Proton VPN Menu Bar.app"
+cp -R "../build/Proton VPN Menu Bar.app" ~/Applications/
+cp com.stevelacey.proton-vpn-menubar.plist ~/Library/LaunchAgents/
+launchctl bootout "gui/$(id -u)/com.stevelacey.proton-vpn-menubar" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.stevelacey.proton-vpn-menubar.plist
+echo "Installed ~/Applications/Proton VPN Menu Bar.app"

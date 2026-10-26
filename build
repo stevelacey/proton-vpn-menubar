@@ -1,0 +1,14 @@
+#!/bin/bash
+# Builds Proton VPN Menu Bar.app into build/, with the Command Line Tools' swiftc.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+app="../build/Proton VPN Menu Bar.app"
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS"
+cp Info.plist "$app/Contents/"
+mkdir -p "$app/Contents/Resources"
+cp Resources/* "$app/Contents/Resources/"
+swiftc -O -parse-as-library -target arm64-apple-macos14 ProtonVPNMenuBar.swift -o "$app/Contents/MacOS/ProtonVPNMenuBar"
+codesign --force --sign - "$app"
+echo "$app"
