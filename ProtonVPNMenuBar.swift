@@ -101,7 +101,15 @@ struct Country: Decodable, Identifiable, Equatable {
     var servers: Int
     var aliases: [String]
     var features: [String]
+    /// The feature combinations its servers have, e.g. [["p2p", "streaming"], ["tor"]].
+    var combos: [[String]]?
     var id: String { code }
+
+    /// Whether one of its servers has all of these features.
+    func hasServer(with features: Set<String>) -> Bool {
+        guard let combos else { return features.isSubset(of: self.features) }
+        return combos.contains { features.isSubset(of: $0) }
+    }
 }
 
 struct Server: Decodable, Identifiable {
@@ -190,6 +198,96 @@ enum MenuBarIcon {
         return image
     }
 
+    /// Proton's connected icon with its triangle filled with the country's flag. Not a template
+    /// image, for the flag's colors, so the checkmark badge is drawn in the menu bar's text color.
+    @MainActor static func flagged(_ code: String) -> NSImage {
+        if let cached = flags[code] { return cached }
+        let flagImage = trimmedFlag(code)
+        let image = NSImage(size: size, flipped: false) { rect in
+            guard let context = NSGraphicsContext.current?.cgContext else { return true }
+            let scale = rect.width / 36
+            let badge = CGRect(x: (25.6 - 10.8) * scale, y: (25.8 - 10.8) * scale, width: 21.6 * scale, height: 21.6 * scale)
+
+            context.saveGState()
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            resource("connected").draw(in: rect)
+            context.setBlendMode(.clear)
+            context.fillEllipse(in: badge)
+            context.setBlendMode(.normal)
+            // The whole flag, centered on the part of the triangle the badge leaves visible, over
+            // a stretched copy that fills the rest of the triangle.
+            flagImage.draw(in: NSRect(x: 0, y: 0, width: 30 * scale, height: 32 * scale), from: .zero, operation: .sourceIn, fraction: 1)
+            let width = 24 * scale, height = width * flagImage.size.height / flagImage.size.width
+            flagImage.draw(in: NSRect(x: 0, y: 17 * scale - height / 2, width: width, height: height),
+                           from: .zero, operation: .sourceAtop, fraction: 1)
+            context.endTransparencyLayer()
+            context.restoreGState()
+
+            // The checkmark badge.
+            context.saveGState()
+            context.addEllipse(in: badge)
+            context.clip()
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
+            resource("connected").draw(in: rect)
+            NSColor.labelColor.setFill()
+            rect.fill(using: .sourceAtop)
+            context.endTransparencyLayer()
+            context.restoreGState()
+            return true
+        }
+        flags[code] = image
+        return image
+    }
+
+    /// The flag emoji, trimmed to the flag itself: the glyph has margins, and shading at the
+    /// edges where it waves.
+    static func trimmedFlag(_ code: String) -> NSImage {
+        let text = NSAttributedString(string: flag(code), attributes: [.font: NSFont.systemFont(ofSize: 160)])
+        let size = text.size()
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return NSImage() }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        text.draw(at: .zero)
+        NSGraphicsContext.restoreGraphicsState()
+
+        var minX = rep.pixelsWide, minY = rep.pixelsHigh, maxX = 0, maxY = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.9 {
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        let width = Double(maxX - minX), height = Double(maxY - minY)
+        let crop = CGRect(x: Double(minX) + width * 0.06, y: Double(minY) + height * 0.1, width: width * 0.88, height: height * 0.8)
+        guard width > 0, height > 0, let image = rep.cgImage?.cropping(to: crop) else { return NSImage() }
+        return NSImage(cgImage: image, size: crop.size)
+    }
+
+    @MainActor private static var flags: [String: NSImage] = [:]
+
+    /// Proton's icon with a (!) in its badge, for errors and dropped connections.
+    static let error: NSImage = {
+        let image = NSImage(size: size, flipped: false) { rect in
+            resource("disconnected").draw(in: rect)
+            guard let context = NSGraphicsContext.current?.cgContext else { return true }
+            let scale = rect.width / 36
+            let center = CGPoint(x: 25.2 * scale, y: 25.6 * scale)
+            let radius = 9.8 * scale
+            context.setFillColor(NSColor.black.cgColor)
+            context.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+            context.setBlendMode(.destinationOut)
+            let width = 2.6 * scale
+            context.addPath(CGPath(roundedRect: CGRect(x: center.x - width / 2, y: center.y - 1.2 * scale, width: width, height: 7.4 * scale),
+                                   cornerWidth: width / 2, cornerHeight: width / 2, transform: nil))
+            context.fillPath()
+            context.fillEllipse(in: CGRect(x: center.x - width / 2, y: center.y - 5.4 * scale, width: width, height: width))
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
     static func sized(_ image: NSImage) -> NSImage {
         image.size = size
         return image
@@ -205,6 +303,14 @@ final class VPN: ObservableObject {
             keepPortForwarded()
             if status.state == "Connected", let code = status.code {
                 remember(code)
+                if code != UserDefaults.standard.string(forKey: "lastCountry") || oldValue.server != status.server,
+                   connectingCode == nil, busy == nil, let server = status.server {
+                    // Connected from the CLI or Alfred: the server's name says if it's Tor (CH#18-TOR) or
+                    // Secure Core (IS-CH#1, unlike US states: US-CO#21).
+                    let prefix = server.split(separator: "#")[0].split(separator: "-")
+                    lastModes = server.hasSuffix("-TOR") ? ["tor"]
+                        : prefix.count == 2 && prefix[1] == code && prefix[0] != code ? ["sc"] : []
+                }
                 UserDefaults.standard.set(code, forKey: "lastCountry")
             }
             if status.state != oldValue.state { Task { await loadPublicIP() } }
@@ -381,7 +487,13 @@ final class VPN: ObservableObject {
     /// Server lists by mode and country, fetched as countries are expanded, until the panel closes.
     @Published private var serverLists: [String: [City]] = [:]
 
-    func cities(_ code: String) -> [City]? { serverLists["\(mode ?? "")\(code)"] }
+    /// A country's cities, with only their servers that have every filtered feature.
+    func cities(_ code: String) -> [City]? {
+        serverLists["\(mode ?? "")\(code)"]?.compactMap { city in
+            let servers = city.servers.filter { filters.isSubset(of: $0.features) }
+            return servers.isEmpty ? nil : City(city: city.city, servers: servers)
+        }
+    }
 
     func loadServers(_ code: String) async {
         let key = "\(mode ?? "")\(code)"
@@ -397,24 +509,53 @@ final class VPN: ObservableObject {
 
     func connect(city: String, in country: Country) {
         guard busy == nil else { return }
+        closePanel()
         connectingCode = country.code
         run("Connecting to \(city)\(modeLabel)…", ["city"] + modeWords + [city])
     }
 
     func connect(server: Server, in country: Country) {
         guard busy == nil else { return }
+        closePanel()
         connectingCode = country.code
         run("Connecting to \(server.name)…", [server.name])
     }
 
     func connect(_ country: Country) {
         guard busy == nil else { return }
+        closePanel()
         connectingCode = country.code
+        lastModes = modeWords
         run("Connecting to \(country.name)\(modeLabel)…", modeWords + [country.code])
     }
-    func fastest() { run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"]) }
-    func random() { run("Connecting to a random server\(modeLabel)…", modeWords + ["random"]) }
-    func disconnect() { run("Disconnecting…", ["off"]) }
+    func fastest() {
+        closePanel()
+        lastModes = modeWords
+        run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"])
+    }
+
+    func random() {
+        closePanel()
+        lastModes = modeWords
+        run("Connecting to a random server\(modeLabel)…", modeWords + ["random"])
+    }
+
+    func disconnect() {
+        closePanel()
+        run("Disconnecting…", ["off"])
+    }
+
+    /// Closes the menu bar panel, once a connect or disconnect is under way.
+    private func closePanel() {
+        NSApp.keyWindow?.close()
+    }
+
+    /// The modes (sc, tor, p2p) of the last connection made here, for reconnecting on launch with
+    /// the same kind of server.
+    private var lastModes: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "lastModes") ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: "lastModes") }
+    }
     func signOut() {
         guard busy == nil else { return }
         busy = "Signing out…"
@@ -455,8 +596,10 @@ final class VPN: ObservableObject {
 
     private func reconnectOnLaunch() {
         guard autoConnect, account != nil, status.state == "Disconnected",
-              let code = UserDefaults.standard.string(forKey: "lastCountry"), let country = countries.first(where: { $0.code == code }) else { return }
-        connect(country)
+              let code = UserDefaults.standard.string(forKey: "lastCountry") else { return }
+        let modes = lastModes
+        connectingCode = code
+        run("Reconnecting…", modes + [code])
     }
 
     /// Whether `vpn setup` still has to run, so connecting works without a password.
@@ -593,8 +736,9 @@ final class VPN: ObservableObject {
     /// Countries that have servers for the current mode.
     func available(_ list: [Country]) -> [Country] {
         if secureCore { return list.filter { $0.features.contains("securecore") } }
-        if !filters.isEmpty { return list.filter { filters.isSubset(of: $0.features) } }
-        if settings.portForwarding { return list.filter { $0.features.contains("p2p") } }
+        // Port forwarding only works on P2P servers, so it's one more feature to have.
+        let required = settings.portForwarding ? filters.union(["p2p"]) : filters
+        if !required.isEmpty { return list.filter { $0.hasServer(with: required) } }
         return list
     }
 
@@ -652,6 +796,8 @@ final class VPN: ObservableObject {
 
     var icon: NSImage {
         if connecting { return MenuBarIcon.connecting[frame % 3] }
+        if status.state == "Dropped" || (message != nil && status.state != "Connected") { return MenuBarIcon.error }
+        if showFlag, status.state == "Connected", let code = status.code { return MenuBarIcon.flagged(code) }
         return status.state == "Connected" ? MenuBarIcon.connected : MenuBarIcon.disconnected
     }
 }
@@ -893,7 +1039,7 @@ struct InstallCLI: View {
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help("Quit")
             }
-            Text("This app runs on Proton VPN's official CLI, ported to macOS. Install it with Homebrew:")
+            Text("This app runs on the Proton VPN CLI, forked for macOS. Install it with Homebrew:")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -978,7 +1124,7 @@ struct SignInForm: View {
             Divider()
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "checkmark.shield").foregroundStyle(.secondary)
-                Text("Signs in through Proton VPN's official CLI, straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
+                Text("Signs in with the Proton VPN CLI (forked for macOS), straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1311,7 +1457,7 @@ struct Panel: View {
     }
 
     @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
-        let servers = vpn.filters.contains("streaming") ? city.servers.filter { $0.features.contains("streaming") } : city.servers
+        let servers = city.servers
         ForEach(servers.prefix(serverLimit)) { server in
             ServerRow(server: server, country: c.code, current: vpn.status.server == server.name) {
                 vpn.connect(server: server, in: c)
@@ -1447,8 +1593,10 @@ struct Panel: View {
                     Divider()
                     Button("Sign Out") { vpn.signOut() }
                     Divider()
-                    Link("About (unofficial, not affiliated with Proton AG)",
-                         destination: URL(string: "https://github.com/stevelacey/proton-vpn-menubar")!)
+                    Link("About Proton VPN Menu Bar", destination: URL(string: "https://github.com/stevelacey/proton-vpn-menubar")!)
+                    // UTM tags, so steve.ly's analytics can tell visits from the app apart.
+                    Link("Made with ♥ by Steve",
+                         destination: URL(string: "https://steve.ly/?utm_source=proton-vpn-menubar&utm_medium=app")!)
                 } label: {
                     Image(systemName: "gearshape")
                 }
@@ -1486,9 +1634,6 @@ struct ProtonVPNMenuBar: App {
             Panel(vpn: vpn)
         } label: {
             Image(nsImage: vpn.icon)
-            if vpn.showFlag, vpn.status.state == "Connected", let code = vpn.status.code {
-                Text(flag(code))
-            }
         }
         .menuBarExtraStyle(.window)
     }
