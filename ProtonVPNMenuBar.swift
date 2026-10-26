@@ -362,6 +362,9 @@ final class VPN: ObservableObject {
                 UserDefaults.standard.set(code, forKey: "lastCountry")
             }
             if status.state != oldValue.state { Task { await loadPublicIP() } }
+            // Done as soon as the tunnel is: Proton's CLI then spends seconds refreshing its server
+            // list before it exits.
+            if busy == "Disconnecting…" && status.state == "Disconnected" { busy = nil }
         }
     }
     /// The IP address sites see while disconnected.
@@ -396,8 +399,10 @@ final class VPN: ObservableObject {
             Task { await self?.refresh() }
         }
         watch(connectionDirectory)
-        // Proton rewrites settings.json in place, which only the file itself reports.
-        watch(settingsDirectory + "/settings.json")
+        // Proton rewrites settings.json in place, which only the file itself reports; the folder
+        // reports it being created or removed (signing out removes it), to watch the new one.
+        watch(settingsDirectory)
+        watchSettingsFile()
         registerLoginItemOnce()
         // A newer release, checked on launch and then daily.
         Task { await checkForUpdates() }
@@ -422,11 +427,30 @@ final class VPN: ObservableObject {
         guard fd >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .rename, .delete], queue: .main)
         source.setEventHandler { [weak self] in
+            if directory == settingsDirectory { self?.watchSettingsFile() }
             Task { await self?.refresh(force: true) }
         }
         source.setCancelHandler { close(fd) }
         source.resume()
         watchers.append(source)
+    }
+
+    private var settingsWatcher: DispatchSourceFileSystemObject?
+
+    /// Watches settings.json, if it exists, replacing the watcher on a file that's since gone.
+    private func watchSettingsFile() {
+        settingsWatcher?.cancel()
+        settingsWatcher = nil
+        let fd = open(settingsDirectory + "/settings.json", O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .rename, .delete], queue: .main)
+        source.setEventHandler { [weak self] in
+            if source.data.contains(.delete) || source.data.contains(.rename) { self?.watchSettingsFile() }
+            Task { await self?.refresh(force: true) }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        settingsWatcher = source
     }
 
     /// Countries most recently connected to, wherever from (here, the CLI or Alfred), newest first.
@@ -506,7 +530,8 @@ final class VPN: ObservableObject {
         message = nil
         Task {
             let (code, output) = await runVPN(arguments)
-            busy = nil
+            // It may have been cleared already, once the connection changed (see status).
+            if busy == label { busy = nil }
             connectingCode = nil
             let lines = output.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             await refresh()
