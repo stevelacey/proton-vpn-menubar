@@ -127,7 +127,7 @@ struct City: Decodable, Identifiable {
 }
 
 /// Runs `vpn` with the given arguments, returning its exit status and output.
-func runVPN(_ arguments: [String]) async -> (Int32, String) {
+func runVPN(_ arguments: [String], started: (@Sendable (Process) -> Void)? = nil) async -> (Int32, String) {
     await withCheckedContinuation { continuation in
         DispatchQueue.global().async {
             let process = Process()
@@ -142,6 +142,7 @@ func runVPN(_ arguments: [String]) async -> (Int32, String) {
                 continuation.resume(returning: (-1, "Couldn't run \(vpnPath): \(error.localizedDescription)"))
                 return
             }
+            started?(process)
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             continuation.resume(returning: (process.terminationStatus, String(decoding: data, as: UTF8.self)))
@@ -351,14 +352,6 @@ final class VPN: ObservableObject {
             keepPortForwarded()
             if status.state == "Connected", let code = status.code {
                 remember(code)
-                if code != UserDefaults.standard.string(forKey: "lastCountry") || oldValue.server != status.server,
-                   connectingCode == nil, busy == nil, let server = status.server {
-                    // Connected from the CLI or Alfred: the server's name says if it's Tor (CH#18-TOR) or
-                    // Secure Core (IS-CH#1, unlike US states: US-CO#21).
-                    let prefix = server.split(separator: "#")[0].split(separator: "-")
-                    lastModes = server.hasSuffix("-TOR") ? ["tor"]
-                        : prefix.count == 2 && prefix[1] == code && prefix[0] != code ? ["sc"] : []
-                }
                 UserDefaults.standard.set(code, forKey: "lastCountry")
             }
             if status.state != oldValue.state { Task { await loadPublicIP() } }
@@ -529,7 +522,15 @@ final class VPN: ObservableObject {
         busy = label
         message = nil
         Task {
-            let (code, output) = await runVPN(arguments)
+            let (code, output) = await runVPN(arguments) { process in
+                Task { @MainActor [weak self] in self?.running = process }
+            }
+            running = nil
+            // Cancelled: the disconnect that cancelled it says how that went.
+            if code == SIGTERM && cancelled == label {
+                cancelled = nil
+                return
+            }
             // It may have been cleared already, once the connection changed (see status).
             if busy == label { busy = nil }
             connectingCode = nil
@@ -603,36 +604,107 @@ final class VPN: ObservableObject {
         guard busy == nil else { return }
         closePanel()
         connectingCode = country.code
-        lastModes = modeWords
         run("Connecting to \(country.name)\(modeLabel)…", modeWords + [country.code])
     }
     func fastest() {
         closePanel()
-        lastModes = modeWords
         run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"])
     }
 
     func random() {
         closePanel()
-        lastModes = modeWords
         run("Connecting to a random server\(modeLabel)…", modeWords + ["random"])
     }
 
+    /// The `vpn` command under way, for cancelling a connect.
+    private var running: Process?
+    private var cancelled: String?
+
+    /// Disconnects, or cancels connecting by stopping that command first.
     func disconnect() {
         closePanel()
+        if let busy, busy.hasPrefix("Connecting") || busy.hasPrefix("Reconnecting"), let running {
+            cancelled = busy
+            running.terminate()
+            self.busy = nil
+            connectingCode = nil
+        }
         run("Disconnecting…", ["off"])
     }
 
-    /// Closes the menu bar panel, once a connect or disconnect is under way.
+    /// Closes the menu bar panel, once a connect or disconnect is under way. It's closed by clicking
+    /// the menu bar item, as you would, since closing the window itself leaves the item highlighted
+    /// and the next click only closes what's already gone.
     private func closePanel() {
-        NSApp.keyWindow?.close()
+        func statusButton(in view: NSView?) -> NSStatusBarButton? {
+            guard let view else { return nil }
+            if let button = view as? NSStatusBarButton { return button }
+            return view.subviews.lazy.compactMap { statusButton(in: $0) }.first
+        }
+        let button = NSApp.windows
+            .filter { $0.className.contains("NSStatusBarWindow") }
+            .lazy.compactMap { statusButton(in: $0.contentView) }
+            .first
+        if let button, NSApp.keyWindow != nil {
+            button.performClick(nil)
+        } else {
+            NSApp.keyWindow?.close()
+        }
     }
 
-    /// The modes (sc, tor, p2p) of the last connection made here, for reconnecting on launch with
-    /// the same kind of server.
-    private var lastModes: [String] {
-        get { UserDefaults.standard.stringArray(forKey: "lastModes") ?? [] }
-        set { UserDefaults.standard.set(newValue, forKey: "lastModes") }
+    /// Where Quick Connect goes: the last country, if it has servers for the current filters and
+    /// Secure Core; otherwise the fastest server for them.
+    var quickConnectCountry: Country? {
+        guard account?.free != true, let code = UserDefaults.standard.string(forKey: "lastCountry") else { return nil }
+        return available(countries).first { $0.code == code }
+    }
+
+    /// Turns Secure Core on, after a note about its speed (until that's turned off), or off.
+    func toggleSecureCore() {
+        guard !secureCore else { secureCore = false; return }
+        if !UserDefaults.standard.bool(forKey: "skipSecureCoreNote") {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "A note about speed"
+            alert.informativeText = "Secure Core routes your connection through a second server in Switzerland, Iceland or Sweden first. It's the most private option, but it can be slower. Turn it off if you need more speed."
+            alert.addButton(withTitle: "Turn On Secure Core")
+            alert.addButton(withTitle: "Cancel")
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Don't show again"
+            let response = alert.runModal()
+            if alert.suppressionButton?.state == .on { UserDefaults.standard.set(true, forKey: "skipSecureCoreNote") }
+            guard response == .alertFirstButtonReturn else { return }
+        }
+        secureCore = true
+    }
+
+    /// Quits, asking first while connected whether to leave the VPN on (the CLI and Alfred can still
+    /// use it) or disconnect.
+    func quit() {
+        guard status.state != "Disconnected" else { NSApp.terminate(nil); return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Quit Proton VPN Menu Bar?"
+        alert.informativeText = "You're connected to \(status.server ?? "Proton VPN"). It stays connected after quitting, unless you disconnect."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Disconnect and Quit")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            NSApp.terminate(nil)
+        case .alertSecondButtonReturn:
+            busy = "Disconnecting…"
+            Task {
+                _ = await runVPN(["off"])
+                NSApp.terminate(nil)
+            }
+        default:
+            break
+        }
+    }
+
+    func quickConnect() {
+        if let country = quickConnectCountry { connect(country) } else { fastest() }
     }
     func signOut() {
         guard busy == nil else { return }
@@ -726,11 +798,8 @@ final class VPN: ObservableObject {
     }
 
     private func reconnectOnLaunch() {
-        guard autoConnect, account != nil, status.state == "Disconnected",
-              let code = UserDefaults.standard.string(forKey: "lastCountry") else { return }
-        let modes = lastModes
-        connectingCode = code
-        run("Reconnecting…", modes + [code])
+        guard autoConnect, account != nil, status.state == "Disconnected" else { return }
+        quickConnect()
     }
 
     /// Whether `vpn setup` still has to run, so connecting works without a password.
@@ -1107,12 +1176,15 @@ struct PinButton: View {
     }
 }
 
-/// The country connected to (or connecting or dropped), tinted by state, with the Disconnect button.
+/// The country connected to (or connecting or dropped), tinted by state; clicking it disconnects (or
+/// cancels).
 struct ActiveCountryRow: View {
     let country: Country
     let state: String
     let expanded: Bool
     let toggleExpanded: () -> Void
+    let pinned: Bool
+    let togglePin: () -> Void
     let disconnect: () -> Void
     @State private var hovering = false
 
@@ -1125,24 +1197,23 @@ struct ActiveCountryRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(flag(country.code))
-            Text(country.name).fontWeight(.semibold)
-            Spacer()
-            FeatureIcons(features: country.features)
-            Button(action: disconnect) {
-                Text(state == "Connecting" ? "Cancel" : "Disconnect")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.primary.opacity(hovering ? 0.25 : 0.14)))
+        Button(action: disconnect) {
+            HStack(spacing: 8) {
+                Text(flag(country.code))
+                Text(country.name).fontWeight(.semibold)
+                Spacer()
+                FeatureIcons(features: country.features)
+                PinButton(pinned: pinned, visible: hovering, action: togglePin)
+                ExpandButton(expanded: expanded, action: toggleExpanded)
             }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-            ExpandButton(expanded: expanded, action: toggleExpanded)
+            // The same as the other rows, so the list doesn't change height as you connect.
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(state == "Connecting" ? "Cancel" : "Disconnect")
         .background {
             if state == "Connecting" {
                 // Pulses while connecting.
@@ -1183,9 +1254,15 @@ struct ActiveCountryRow: View {
     NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .version: ""])
 }
 
+extension View {
+    /// The header's lines have fixed heights, so the panel doesn't change height between states.
+    func titleLine() -> some View { frame(height: 24, alignment: .leading) }
+    func infoLine() -> some View { frame(height: 20, alignment: .leading) }
+}
+
 /// Shown when the `vpn` command isn't installed.
 struct InstallCLI: View {
-    let command = "brew install stevelacey/tap/proton-vpn-cli-macos"
+    let command = "brew install stevelacey/tap/proton-vpn-cli"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1383,6 +1460,25 @@ struct Toggle: View {
     }
 }
 
+/// Quick Connect while disconnected (to the last country, with the current filters); Cancel while
+/// connecting and Disconnect once connected, in its place.
+struct QuickConnectButton: View {
+    @ObservedObject var vpn: VPN
+
+    var body: some View {
+        switch vpn.activeState {
+        case "Disconnected":
+            ActionButton(title: "Quick Connect", symbol: "bolt.horizontal.fill") { vpn.quickConnect() }
+                .disabled(vpn.busy != nil)
+        case "Connecting":
+            ActionButton(title: "Cancel", symbol: "xmark") { vpn.disconnect() }
+        default:
+            ActionButton(title: "Disconnect", symbol: "bolt.slash.fill") { vpn.disconnect() }
+                .disabled(vpn.busy != nil)
+        }
+    }
+}
+
 struct ActionButton: View {
     let title: String
     let symbol: String
@@ -1392,7 +1488,8 @@ struct ActionButton: View {
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
-                .frame(maxWidth: .infinity, minHeight: 28)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering ? 0.12 : 0.06)))
         }
         .buttonStyle(.plain)
@@ -1441,8 +1538,9 @@ struct Panel: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
             }
 
+            QuickConnectButton(vpn: vpn)
+
             if vpn.account?.free == true {
-                ActionButton(title: "Connect", symbol: "bolt.fill") { vpn.fastest() }
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "info.circle").foregroundStyle(.secondary)
                     Text("On Proton Free, Proton picks the server. Plus adds countries, Secure Core, P2P and NetShield. ")
@@ -1482,7 +1580,7 @@ struct Panel: View {
 
             HStack(spacing: 6) {
                 Toggle(title: "Secure Core", image: Image(nsImage: resource("ic-lock")), on: vpn.secureCore) {
-                    vpn.secureCore.toggle()
+                    vpn.toggleSecureCore()
                 }
                 // NetShield filters Proton's DNS, so it does nothing with another provider's.
                 Toggle(title: "NetShield", image: Image(nsImage: resource("ic-shield")),
@@ -1587,9 +1685,11 @@ struct Panel: View {
             if expanded != nil { Task { await vpn.loadServers(c.code) } }
         }
         if c.code == vpn.activeCode {
-            // The current connection stays in its place, highlighted, with the Disconnect button.
-            ActiveCountryRow(country: c, state: vpn.activeState, expanded: expanded == c.code,
-                             toggleExpanded: toggle) { vpn.disconnect() }
+            // The current connection stays in its place, highlighted.
+            ActiveCountryRow(country: c, state: vpn.activeState, expanded: expanded == c.code, toggleExpanded: toggle,
+                             pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) }) {
+                vpn.disconnect()
+            }
         } else {
             CountryRow(country: c, pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) },
                        expanded: expanded == c.code, toggleExpanded: toggle) {
@@ -1694,11 +1794,15 @@ struct Panel: View {
 
     @ViewBuilder var header: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Always two lines (a title, then the IP or server), so the panel keeps its height.
             if let busy = vpn.busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(busy).font(.headline).lineLimit(2).padding(.trailing, 50)
+                    Text(busy).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                 }
+                .padding(.trailing, 50)
+                .titleLine()
+                ipLabel(vpn.status.state == "Connected" ? vpn.status.ip : vpn.publicIP).infoLine()
             } else {
                 switch vpn.status.state {
                 case "Connected":
@@ -1709,12 +1813,14 @@ struct Panel: View {
                     }
                     .font(.title3)
                     .padding(.trailing, 50)
+                    .titleLine()
                     .help(vpn.status.city ?? "")
                     HStack(spacing: 4) {
                         ipLabel(vpn.status.ip)
                         Spacer()
                         dnsMenu
                     }
+                    .infoLine()
                     if let port = vpn.status.port {
                         HStack(spacing: 4) {
                             Text("Forwarded port:").foregroundStyle(.secondary)
@@ -1725,15 +1831,18 @@ struct Panel: View {
                 case "Connecting":
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Connecting to \(vpn.status.server ?? "")…").font(.headline).padding(.trailing, 50)
+                        Text("Connecting…").font(.title3.weight(.semibold))
                     }
+                    .padding(.trailing, 50)
+                    .titleLine()
+                    Text(vpn.status.server ?? "").font(.callout).foregroundStyle(.secondary).infoLine()
                 case "Dropped":
-                    Text("Connection Dropped").font(.title3.weight(.semibold)).foregroundStyle(.orange)
-                    Text("\(vpn.status.server ?? "The server") stopped responding").font(.callout).foregroundStyle(.secondary)
+                    Text("Connection Dropped").font(.title3.weight(.semibold)).foregroundStyle(.orange).titleLine()
+                    Text("\(vpn.status.server ?? "The server") stopped responding").font(.callout).foregroundStyle(.secondary).infoLine()
                 default:
-                    Text("Not Connected").font(.title3.weight(.semibold)).foregroundStyle(notConnected)
+                    Text("Not Connected").font(.title3.weight(.semibold)).foregroundStyle(notConnected).titleLine()
                     // DNS only applies to the tunnel, so there's nothing to pick while disconnected.
-                    ipLabel(vpn.publicIP)
+                    ipLabel(vpn.publicIP).infoLine()
                 }
             }
             if let message = vpn.message {
@@ -1743,14 +1852,6 @@ struct Panel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 10) {
-                // Normally on the country's row; here only if it isn't listed, e.g. filtered out, but not while
-                // searching, so the panel doesn't shift around as you type.
-                if vpn.status.state != "Disconnected" && vpn.busy == nil && query.isEmpty
-                    && !listed.contains(where: { $0.code == vpn.activeCode }) {
-                    Button("Disconnect") { vpn.disconnect() }
-                        .controlSize(.small)
-                        .focusable(false)
-                }
                 Menu {
                     if let update = vpn.update {
                         Button("Update Available: \(update.version)…") { vpn.offerUpdate() }
@@ -1783,7 +1884,7 @@ struct Panel: View {
                 .fixedSize()
                 .focusable(false)
                 .help("Settings")
-                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                Button { vpn.quit() } label: { Image(systemName: "power") }
                     .buttonStyle(.plain)
                     .focusable(false)
                     .help("Quit")

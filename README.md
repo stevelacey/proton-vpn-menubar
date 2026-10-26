@@ -44,7 +44,7 @@ It installs [proton-vpn-cli-macos](https://github.com/stevelacey/proton-vpn-cli-
 for your Mac's password to set it up, so connecting doesn't need it again.
 
 Or download the app from [releases](https://github.com/stevelacey/proton-vpn-menubar/releases), with
-`brew install stevelacey/tap/proton-vpn-cli-macos` for the CLI.
+`brew install stevelacey/tap/proton-vpn-cli` for the CLI.
 
 Requires macOS 14 or later.
 
