@@ -64,6 +64,10 @@ struct Settings: Decodable, Equatable {
 struct Account: Decodable, Equatable {
     var username: String
     var plan: String
+    var tier: Int?
+
+    /// Proton Free, which connects to the fastest free server only.
+    var free: Bool { tier == 0 }
 }
 
 /// Splits a process's output into lines as it arrives.
@@ -151,6 +155,7 @@ func fold(_ s: String) -> String {
 func resource(_ name: String, template: Bool = true) -> NSImage {
     let url = Bundle.main.url(forResource: name, withExtension: "pdf")
         ?? Bundle.main.url(forResource: name, withExtension: "png")
+        ?? Bundle.main.url(forResource: name, withExtension: "icns")
     let image = url.flatMap(NSImage.init(contentsOf:)) ?? NSImage()
     image.isTemplate = template
     return image
@@ -924,9 +929,9 @@ struct SignInForm: View {
             }
             .padding(.bottom, -14)
             VStack(spacing: 6) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(Color.accentColor)
+                Image(nsImage: resource("AppIcon", template: false))
+                    .resizable()
+                    .frame(width: 56, height: 56)
                 Text(isCode ? "Two-factor authentication" : "Sign in to Proton VPN")
                     .font(.title2.weight(.semibold))
                 Text(isCode ? "Enter the 6-digit code from your authenticator app, or a recovery code."
@@ -937,6 +942,11 @@ struct SignInForm: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.top, 6)
+
+            Text("Unofficial app, not affiliated with Proton AG")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.top, -8)
 
             if isCode {
                 field("Code") {
@@ -1127,6 +1137,38 @@ struct Panel: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
             }
 
+            if vpn.account?.free == true {
+                ActionButton(title: "Connect", symbol: "bolt.fill") { vpn.fastest() }
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    Text("On Proton Free, Proton picks the server. Plus adds countries, Secure Core, P2P and NetShield. ")
+                        .foregroundStyle(.secondary)
+                    + Text("[Upgrade](https://protonvpn.com/pricing)")
+                }
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                paidControls
+            }
+        }
+        .padding(12)
+        .frame(width: 320)
+        .onAppear {
+            Task {
+                await vpn.refresh()
+                // The network may have changed since.
+                await vpn.loadPublicIP()
+            }
+        }
+        .onDisappear {
+            query = ""
+            expanded = nil
+            vpn.forgetServers()
+        }
+    }
+
+    /// Everything a paid plan can choose: quick connects, features and countries.
+    @ViewBuilder var paidControls: some View {
             HStack(spacing: 8) {
                 ActionButton(title: "Fastest", symbol: "bolt.fill") { vpn.fastest() }
                 ActionButton(title: "Random", symbol: "shuffle") { vpn.random() }
@@ -1157,25 +1199,9 @@ struct Panel: View {
             }
             .disabled(vpn.busy != nil)
 
-
             Divider()
 
             countries
-        }
-        .padding(12)
-        .frame(width: 320)
-        .onAppear {
-            Task {
-                await vpn.refresh()
-                // The network may have changed since.
-                await vpn.loadPublicIP()
-            }
-        }
-        .onDisappear {
-            query = ""
-            expanded = nil
-            vpn.forgetServers()
-        }
     }
 
     @ViewBuilder var countries: some View {
@@ -1420,6 +1446,9 @@ struct Panel: View {
                     SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
                     Divider()
                     Button("Sign Out") { vpn.signOut() }
+                    Divider()
+                    Link("About (unofficial, not affiliated with Proton AG)",
+                         destination: URL(string: "https://github.com/stevelacey/proton-vpn-menubar")!)
                 } label: {
                     Image(systemName: "gearshape")
                 }
