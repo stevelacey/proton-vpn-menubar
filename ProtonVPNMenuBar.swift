@@ -210,26 +210,25 @@ enum MenuBarIcon {
 
             context.saveGState()
             context.beginTransparencyLayer(auxiliaryInfo: nil)
-            resource("connected").draw(in: rect)
-            context.setBlendMode(.clear)
-            context.fillEllipse(in: badge)
-            context.setBlendMode(.normal)
-            // The whole flag, centered on the part of the triangle the badge leaves visible, over
-            // a stretched copy that fills the rest of the triangle.
-            flagImage.draw(in: NSRect(x: 0, y: 0, width: 30 * scale, height: 32 * scale), from: .zero, operation: .sourceIn, fraction: 1)
-            let width = 24 * scale, height = width * flagImage.size.height / flagImage.size.width
-            flagImage.draw(in: NSRect(x: 0, y: 17 * scale - height / 2, width: width, height: height),
-                           from: .zero, operation: .sourceAtop, fraction: 1)
+            if let solid = solidTriangle { context.draw(solid, in: rect) }
+            // The flag scaled to cover the triangle (in the icon's left 30x32), cropped at its sides
+            // rather than stretched.
+            let box = NSRect(x: 0, y: 0, width: 30 * scale, height: 32 * scale)
+            let fill = max(box.width / flagImage.size.width, box.height / flagImage.size.height)
+            let size = NSSize(width: flagImage.size.width * fill, height: flagImage.size.height * fill)
+            flagImage.draw(in: NSRect(x: box.midX - size.width / 2, y: box.midY - size.height / 2, width: size.width, height: size.height),
+                           from: .zero, operation: .sourceIn, fraction: 1)
             context.endTransparencyLayer()
             context.restoreGState()
 
-            // The checkmark badge.
+            // The checkmark badge, in white or black like the menu bar's template icons.
             context.saveGState()
             context.addEllipse(in: badge)
             context.clip()
             context.beginTransparencyLayer(auxiliaryInfo: nil)
             resource("connected").draw(in: rect)
-            NSColor.labelColor.setFill()
+            let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            (dark ? NSColor.white : NSColor.black).setFill()
             rect.fill(using: .sourceAtop)
             context.endTransparencyLayer()
             context.restoreGState()
@@ -237,6 +236,55 @@ enum MenuBarIcon {
         }
         flags[code] = image
         return image
+    }
+
+    /// Proton's triangle as one solid shape, without the badge or the line inside it, so the flag
+    /// fills all of it: the convex hull of the triangle's pixels, with the gap around the badge
+    /// (radius 12.1; the badge itself is 10.3) cut out again.
+    static let solidTriangle: CGImage? = {
+        let n = 144, scale = Double(n) / 36
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: n, pixelsHigh: n, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        resource("connected").draw(in: NSRect(x: 0, y: 0, width: n, height: n))
+        NSGraphicsContext.restoreGraphicsState()
+
+        let center = CGPoint(x: 25.6 * scale, y: 25.8 * scale), gap = 12.1 * scale
+        var points: [CGPoint] = []
+        for y in 0..<n {
+            for x in 0..<n where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
+                let point = CGPoint(x: Double(x) + 0.5, y: Double(n - y) - 0.5)
+                if hypot(point.x - center.x, point.y - center.y) > gap { points.append(point) }
+            }
+        }
+        let hull = convexHull(points)
+        guard hull.count > 2, let context = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0,
+                                                       space: CGColorSpaceCreateDeviceRGB(),
+                                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.addLines(between: hull)
+        context.closePath()
+        context.fillPath()
+        context.setBlendMode(.clear)
+        context.fillEllipse(in: CGRect(x: center.x - gap, y: center.y - gap, width: gap * 2, height: gap * 2))
+        return context.makeImage()
+    }()
+
+    /// The smallest convex polygon around the points (Andrew's monotone chain).
+    static func convexHull(_ points: [CGPoint]) -> [CGPoint] {
+        let sorted = points.sorted { ($0.x, $0.y) < ($1.x, $1.y) }
+        func cross(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> Double { (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x) }
+        var lower: [CGPoint] = [], upper: [CGPoint] = []
+        for p in sorted {
+            while lower.count >= 2 && cross(lower[lower.count - 2], lower[lower.count - 1], p) <= 0 { lower.removeLast() }
+            lower.append(p)
+        }
+        for p in sorted.reversed() {
+            while upper.count >= 2 && cross(upper[upper.count - 2], upper[upper.count - 1], p) <= 0 { upper.removeLast() }
+            upper.append(p)
+        }
+        return Array(lower.dropLast() + upper.dropLast())
     }
 
     /// The flag emoji, trimmed to the flag itself: the glyph has margins, and shading at the
@@ -351,6 +399,11 @@ final class VPN: ObservableObject {
         // Proton rewrites settings.json in place, which only the file itself reports.
         watch(settingsDirectory + "/settings.json")
         registerLoginItemOnce()
+        // A newer release, checked on launch and then daily.
+        Task { await checkForUpdates() }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { await self?.checkForUpdates() }
+        }
         Task {
             await loadAccount()
             await checkSetup()
@@ -565,6 +618,59 @@ final class VPN: ObservableObject {
             await loadAccount()
             await refresh()
         }
+    }
+
+    /// A newer release on GitHub, if there is one.
+    @Published var update: (version: String, url: URL)?
+    private var updateTimer: Timer?
+
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+
+    /// Checks GitHub for a newer release; asked for from the menu, it also says when there isn't one.
+    func checkForUpdates(manual: Bool = false) async {
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/stevelacey/proton-vpn-menubar/releases/latest")!)
+        request.timeoutInterval = 10
+        struct Release: Decodable { let tag_name: String; let html_url: URL }
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else {
+            if manual { alert("Couldn't check for updates", "GitHub didn't answer. Try again later.") }
+            return
+        }
+        guard let release = try? JSONDecoder().decode(Release.self, from: data) else {
+            // No releases yet (a 404) means this is the latest.
+            if (response as? HTTPURLResponse)?.statusCode == 404 {
+                if manual { alert("You're up to date", "Proton VPN Menu Bar \(Self.version) is the latest version.") }
+                return
+            }
+            if manual { alert("Couldn't check for updates", "GitHub didn't answer. Try again later.") }
+            return
+        }
+        let latest = release.tag_name.trimmingCharacters(in: CharacterSet(charactersIn: "v"))
+        if latest.compare(Self.version, options: .numeric) == .orderedDescending {
+            update = (latest, release.html_url)
+            if manual { offerUpdate() }
+        } else {
+            update = nil
+            if manual { alert("You're up to date", "Proton VPN Menu Bar \(Self.version) is the latest version.") }
+        }
+    }
+
+    func offerUpdate() {
+        guard let update else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Proton VPN Menu Bar \(update.version) is available"
+        alert.informativeText = "You have \(Self.version). If you installed it with Homebrew, run `brew upgrade`; otherwise download the new version."
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(update.url) }
+    }
+
+    private func alert(_ title: String, _ text: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.runModal()
     }
 
     /// Connects again to the last country on launch, when disconnected.
@@ -1027,6 +1133,31 @@ struct ActiveCountryRow: View {
     }
 }
 
+/// macOS's standard About window, with credits linking to the project and its siblings.
+@MainActor func showAbout() {
+    let link = { (text: String, url: String) in
+        NSAttributedString(string: text, attributes: [.link: URL(string: url)!])
+    }
+    let credits = NSMutableAttributedString()
+    let lines: [[NSAttributedString]] = [
+        [NSAttributedString(string: "A small menu bar app for Proton VPN, compatible with the ")],
+        [link("Proton VPN CLI", "https://github.com/stevelacey/proton-vpn-cli-macos"), NSAttributedString(string: " (forked for macOS) and "),
+         link("Alfred workflow", "https://github.com/stevelacey/alfred-proton-vpn"), NSAttributedString(string: ".\n\n")],
+        [link("Fork on GitHub", "https://github.com/stevelacey/proton-vpn-menubar"), NSAttributedString(string: "  ·  "),
+         // UTM tags, so steve.ly's analytics can tell visits from the app apart.
+         link("Made with ♥ by Steve", "https://steve.ly/?utm_source=proton-vpn-menubar&utm_medium=app")],
+    ]
+    for part in lines.flatMap({ $0 }) { credits.append(part) }
+    let style = NSMutableParagraphStyle()
+    style.alignment = .center
+    credits.addAttributes([.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .paragraphStyle: style,
+                           .foregroundColor: NSColor.secondaryLabelColor],
+                          range: NSRange(location: 0, length: credits.length))
+    NSApp.activate(ignoringOtherApps: true)
+    // No build number: it would only repeat the version.
+    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .version: ""])
+}
+
 /// Shown when the `vpn` command isn't installed.
 struct InstallCLI: View {
     let command = "brew install stevelacey/tap/proton-vpn-cli-macos"
@@ -1080,12 +1211,13 @@ struct SignInForm: View {
                     .frame(width: 56, height: 56)
                 Text(isCode ? "Two-factor authentication" : "Sign in to Proton VPN")
                     .font(.title2.weight(.semibold))
-                Text(isCode ? "Enter the 6-digit code from your authenticator app, or a recovery code."
-                            : "With your Proton account.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
+                if isCode {
+                    Text("Enter the 6-digit code from your authenticator app, or a recovery code.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(.top, 6)
 
@@ -1595,23 +1727,30 @@ struct Panel: View {
                         .focusable(false)
                 }
                 Menu {
+                    if let update = vpn.update {
+                        Button("Update Available: \(update.version)…") { vpn.offerUpdate() }
+                        Divider()
+                    }
                     if let account = vpn.account {
-                        Text(account.username)
-                        Text(account.plan)
+                        Text("\(account.username) (\(account.plan))")
                         Divider()
                     }
                     SwiftUI.Toggle("Open at Login", isOn: Binding(get: { vpn.openAtLogin }, set: { vpn.setOpenAtLogin($0) }))
                     SwiftUI.Toggle("Reconnect on Launch", isOn: $vpn.autoConnect)
                     SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
                     Divider()
-                    Button("Sign Out") { vpn.signOut() }
+                    Button("Check for Updates…") { Task { await vpn.checkForUpdates(manual: true) } }
+                    Button("About Proton VPN Menu Bar") { showAbout() }
                     Divider()
-                    Link("About Proton VPN Menu Bar", destination: URL(string: "https://github.com/stevelacey/proton-vpn-menubar")!)
-                    // UTM tags, so steve.ly's analytics can tell visits from the app apart.
-                    Link("Made with ♥ by Steve",
-                         destination: URL(string: "https://steve.ly/?utm_source=proton-vpn-menubar&utm_medium=app")!)
+                    Button("Sign Out") { vpn.signOut() }
                 } label: {
                     Image(systemName: "gearshape")
+                        .overlay(alignment: .topTrailing) {
+                            // An update is waiting.
+                            if vpn.update != nil {
+                                Circle().fill(Color.accentColor).frame(width: 6, height: 6).offset(x: 2, y: -2)
+                            }
+                        }
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)

@@ -9,9 +9,9 @@ A small menu bar app for Proton VPN on macOS, built on the
 [Proton VPN CLI (forked for macOS)](https://github.com/stevelacey/proton-vpn-cli-macos). It does
 what you need from the menu bar and nothing else: no windows, no dock icon.
 
-<img src="menubar-icons.png" alt="The menu bar icon connected in Switzerland, the US, the UK, the Netherlands, Germany, Japan and Sweden" width="250">
+<img src="menubar-icons.png" alt="The menu bar icon connected in Switzerland, the US, the UK, the Netherlands, Germany, Japan and Sweden" width="500">
 
-<img src="screenshot.png" alt="Screenshot" width="320">
+<img src="screenshot.png" alt="Screenshot" width="366">
 
 > [!NOTE]
 > Unofficial: made by a fan of Proton VPN, not by or with Proton AG.
