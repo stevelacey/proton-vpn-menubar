@@ -1246,6 +1246,7 @@ struct ActionButton: View {
 struct Panel: View {
     @ObservedObject var vpn: VPN
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     @State private var expanded: String?
     @State private var expandedCity: String?
     @State private var serverLimit = serverPage
@@ -1300,6 +1301,8 @@ struct Panel: View {
         .padding(12)
         .frame(width: 320)
         .onAppear {
+            // Start in the search field each time, rather than wherever macOS puts focus.
+            searchFocused = true
             Task {
                 await vpn.refresh()
                 // The network may have changed since.
@@ -1355,6 +1358,7 @@ struct Panel: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(vpn.secureCore ? "Search Secure Core countries" : "Search countries", text: $query)
+                    .focused($searchFocused)
                     .textFieldStyle(.plain)
                     .onSubmit {
                         if let first = vpn.search(query).first {
@@ -1376,7 +1380,14 @@ struct Panel: View {
                             } else {
                                 vpn.filters.insert(filter.feature)
                             }
-                            expanded = nil
+                            // An expanded country stays open if it still matches, with its servers for the new filters.
+                            if let code = expanded {
+                                if listed.contains(where: { $0.code == code }) {
+                                    Task { await vpn.loadServers(code) }
+                                } else {
+                                    expanded = nil
+                                }
+                            }
                         }
                     }
                 }
@@ -1575,8 +1586,10 @@ struct Panel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 10) {
-                // Normally on the country's row, unless the row isn't listed (e.g. while searching).
-                if vpn.status.state != "Disconnected" && vpn.busy == nil && !listed.contains(where: { $0.code == vpn.activeCode }) {
+                // Normally on the country's row; here only if it isn't listed, e.g. filtered out, but not while
+                // searching, so the panel doesn't shift around as you type.
+                if vpn.status.state != "Disconnected" && vpn.busy == nil && query.isEmpty
+                    && !listed.contains(where: { $0.code == vpn.activeCode }) {
                     Button("Disconnect") { vpn.disconnect() }
                         .controlSize(.small)
                         .focusable(false)
@@ -1604,9 +1617,11 @@ struct Panel: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .focusable(false)
                 .help("Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .help("Quit")
             }
             .font(.system(size: 13))
