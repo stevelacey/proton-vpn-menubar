@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds Proton VPN Menu Bar.app into build/, with the Command Line Tools' swiftc.
+# Builds Proton VPN Menu Bar.app into .build/, with the Command Line Tools' swiftc.
 set -euo pipefail
 
 cd "$(dirname "$0")"
-app="../build/Proton VPN Menu Bar.app"
+app=".build/Proton VPN Menu Bar.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp Info.plist "$app/Contents/"

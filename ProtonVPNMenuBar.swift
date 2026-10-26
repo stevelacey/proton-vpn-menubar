@@ -1,9 +1,17 @@
 // Proton VPN in the menu bar: status, quick actions and a country search, all through the `vpn` CLI.
 import AppKit
+import ServiceManagement
 import SwiftUI
 
-let vpnPath = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Sites/proton/.venv/bin/vpn").path
+/// The `vpn` command from proton-vpn-cli-macos, wherever Homebrew, uv or pipx put it.
+let vpnPath: String = {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let candidates = [UserDefaults.standard.string(forKey: "vpnPath"), "/opt/homebrew/bin/vpn",
+                      "/usr/local/bin/vpn", "\(home)/.local/bin/vpn"].compactMap { $0 }
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? candidates[1]
+}()
+
+let cliInstalled = FileManager.default.isExecutableFile(atPath: vpnPath)
 
 let connectionDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".cache/Proton/VPN/connection").path
@@ -51,6 +59,36 @@ struct Settings: Decodable, Equatable {
     enum CodingKeys: String, CodingKey {
         case netshield, killSwitch = "kill_switch", portForwarding = "port_forwarding", dns
     }
+}
+
+struct Account: Decodable, Equatable {
+    var username: String
+    var plan: String
+}
+
+/// Splits a process's output into lines as it arrives.
+final class LineBuffer: @unchecked Sendable {
+    private var text = ""
+    private let lock = NSLock()
+
+    func append(_ data: Data) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        text += String(decoding: data, as: UTF8.self)
+        var lines: [String] = []
+        while let newline = text.firstIndex(of: "\n") {
+            lines.append(String(text[..<newline]))
+            text.removeSubrange(...newline)
+        }
+        return lines
+    }
+}
+
+/// Where signing in from the panel is up to.
+enum SignIn: Equatable {
+    case form
+    case working
+    case code(invalid: Bool)
 }
 
 struct Country: Decodable, Identifiable, Equatable {
@@ -160,7 +198,10 @@ final class VPN: ObservableObject {
             animate()
             if status != oldValue { message = nil }
             keepPortForwarded()
-            if status.state == "Connected", let code = status.code { remember(code) }
+            if status.state == "Connected", let code = status.code {
+                remember(code)
+                UserDefaults.standard.set(code, forKey: "lastCountry")
+            }
             if status.state != oldValue.state { Task { await loadPublicIP() } }
         }
     }
@@ -198,9 +239,13 @@ final class VPN: ObservableObject {
         watch(connectionDirectory)
         // Proton rewrites settings.json in place, which only the file itself reports.
         watch(settingsDirectory + "/settings.json")
+        registerLoginItemOnce()
         Task {
+            await loadAccount()
+            await checkSetup()
             await refresh()
             await loadCountries()
+            reconnectOnLaunch()
         }
     }
 
@@ -305,27 +350,27 @@ final class VPN: ObservableObject {
         }
     }
 
-    /// The feature the country list is filtered by: p2p, tor or streaming.
-    @Published var filter: String?
-
-    /// Secure Core, Tor or P2P servers when filtered by those, and P2P when port forwarding is on
-    /// (it only works on those).
-    private var mode: String? {
-        if secureCore { return "sc" }
-        if filter == "tor" { return "tor" }
-        if filter == "p2p" || settings.portForwarding { return "p2p" }
-        return nil
+    /// The features the country list is filtered by (p2p, tor, streaming), kept between launches.
+    @Published var filters = Set(UserDefaults.standard.stringArray(forKey: "filters") ?? []) {
+        didSet { UserDefaults.standard.set(Array(filters), forKey: "filters") }
     }
 
-    private var modeWords: [String] { mode.map { [$0] } ?? [] }
+    /// Secure Core, or Tor and P2P servers when filtered by those, and P2P when port forwarding is on
+    /// (it only works on those).
+    private var modeWords: [String] {
+        if secureCore { return ["sc"] }
+        var words: [String] = []
+        if filters.contains("tor") { words.append("tor") }
+        if filters.contains("p2p") || settings.portForwarding { words.append("p2p") }
+        return words
+    }
+
+    private var mode: String? { modeWords.isEmpty ? nil : modeWords.joined(separator: " ") }
 
     private var modeLabel: String {
-        switch mode {
-        case "sc": return " via Secure Core"
-        case "tor": return " (Tor)"
-        case "p2p": return " (P2P)"
-        default: return ""
-        }
+        if secureCore { return " via Secure Core" }
+        let labels = modeWords.map { $0 == "tor" ? "Tor" : "P2P" }
+        return labels.isEmpty ? "" : " (\(labels.joined(separator: ", ")))"
     }
 
     /// Server lists by mode and country, fetched as countries are expanded, until the panel closes.
@@ -365,7 +410,159 @@ final class VPN: ObservableObject {
     func fastest() { run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"]) }
     func random() { run("Connecting to a random server\(modeLabel)…", modeWords + ["random"]) }
     func disconnect() { run("Disconnecting…", ["off"]) }
-    func signOut() { run("Signing out…", ["signout"]) }
+    func signOut() {
+        guard busy == nil else { return }
+        busy = "Signing out…"
+        Task {
+            _ = await runVPN(["signout"])
+            busy = nil
+            await loadAccount()
+            await refresh()
+        }
+    }
+
+    /// Connects again to the last country on launch, when disconnected.
+    @Published var autoConnect = UserDefaults.standard.bool(forKey: "autoConnect") {
+        didSet { UserDefaults.standard.set(autoConnect, forKey: "autoConnect") }
+    }
+
+    @Published var showFlag = UserDefaults.standard.object(forKey: "showFlag") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showFlag, forKey: "showFlag") }
+    }
+
+    @Published var openAtLogin = SMAppService.mainApp.status == .enabled
+
+    func setOpenAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            message = "Couldn't change Open at Login: \(error.localizedDescription)"
+        }
+        openAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Opens at login by default, the first time the app runs.
+    private func registerLoginItemOnce() {
+        guard !UserDefaults.standard.bool(forKey: "loginItemRegistered") else { return }
+        UserDefaults.standard.set(true, forKey: "loginItemRegistered")
+        setOpenAtLogin(true)
+    }
+
+    private func reconnectOnLaunch() {
+        guard autoConnect, account != nil, status.state == "Disconnected",
+              let code = UserDefaults.standard.string(forKey: "lastCountry"), let country = countries.first(where: { $0.code == code }) else { return }
+        connect(country)
+    }
+
+    /// Whether `vpn setup` still has to run, so connecting works without a password.
+    @Published var needsSetup = false
+
+    func checkSetup() async {
+        let (code, _) = await runVPN(["setup", "--check"])
+        needsSetup = code != 0
+    }
+
+    /// Runs `vpn setup` as root, with macOS asking for an administrator's password.
+    func runSetup() {
+        let command = "'\(vpnPath)' setup --user \(NSUserName())"
+        let script = "do shell script \"\(command)\" with administrator privileges"
+        busy = "Setting up…"
+        Task {
+            let (status, output) = await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    var error: NSDictionary?
+                    let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
+                    continuation.resume(returning: (error == nil, result?.stringValue ?? (error?[NSAppleScript.errorMessage] as? String ?? "")))
+                }
+            }
+            busy = nil
+            if !status, !output.contains("User canceled") { message = output }
+            await checkSetup()
+        }
+    }
+
+    /// The signed-in account; nil when signed out, once known.
+    @Published var account: Account?
+    @Published var accountLoaded = false
+    @Published var signIn = SignIn.form
+    @Published var signInError: String?
+    private var signInProcess: Process?
+    private var signInInput: FileHandle?
+
+    func loadAccount() async {
+        let (code, output) = await runVPN(["account", "--json"])
+        // Keeps the last known account if the CLI fails, rather than showing the sign-in form.
+        if code == 0 {
+            account = try? JSONDecoder().decode(Account.self, from: Data(output.utf8))
+        }
+        accountLoaded = true
+    }
+
+    /// Signs in through `vpn signin --stdin`, which answers Proton's own prompts from what's typed here.
+    func signIn(username: String, password: String) {
+        guard signInProcess == nil else { return }
+        signIn = .working
+        signInError = nil
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: vpnPath)
+        process.arguments = ["signin", "--stdin"]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = output
+        let buffer = LineBuffer()
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            for line in buffer.append(data) {
+                Task { @MainActor [weak self] in self?.signInReplied(line) }
+            }
+        }
+        process.terminationHandler = { _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.signInProcess = nil
+                self.signInInput = nil
+                if self.signIn != .form { self.signIn = .form }
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            signIn = .form
+            signInError = "Couldn't run \(vpnPath)"
+            return
+        }
+        signInProcess = process
+        signInInput = input.fileHandleForWriting
+        signInInput?.write(Data("\(username)\n\(password)\n".utf8))
+    }
+
+    func submit(code: String) {
+        signIn = .working
+        signInInput?.write(Data("\(code)\n".utf8))
+    }
+
+    func cancelSignIn() {
+        signInProcess?.terminate()
+        signIn = .form
+    }
+
+    private func signInReplied(_ line: String) {
+        if line == "2fa" || line == "2fa invalid" {
+            signIn = .code(invalid: line == "2fa invalid")
+        } else if line.hasPrefix("ok ") {
+            signIn = .form
+            Task {
+                await loadAccount()
+                await refresh(force: true)
+                await loadCountries()
+            }
+        } else if line.hasPrefix("error ") {
+            signIn = .form
+            signInError = String(line.dropFirst(6))
+        }
+    }
 
     func toggleNetShield() {
         let on = settings.netshield == 0
@@ -391,7 +588,7 @@ final class VPN: ObservableObject {
     /// Countries that have servers for the current mode.
     func available(_ list: [Country]) -> [Country] {
         if secureCore { return list.filter { $0.features.contains("securecore") } }
-        if let filter { return list.filter { $0.features.contains(filter) } }
+        if !filters.isEmpty { return list.filter { filters.isSubset(of: $0.features) } }
         if settings.portForwarding { return list.filter { $0.features.contains("p2p") } }
         return list
     }
@@ -679,6 +876,170 @@ struct ActiveCountryRow: View {
     }
 }
 
+/// Shown when the `vpn` command isn't installed.
+struct InstallCLI: View {
+    let command = "brew install stevelacey/tap/proton-vpn-cli-macos"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Install the CLI").font(.title3.weight(.semibold))
+                Spacer()
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Quit")
+            }
+            Text("This app runs on Proton VPN's official CLI, ported to macOS. Install it with Homebrew:")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.plain).help("Copy")
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+            Text("Then reopen this app.").font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 320)
+    }
+}
+
+/// Signing in, shown in place of everything else while signed out.
+struct SignInForm: View {
+    @ObservedObject var vpn: VPN
+    @State private var username = ""
+    @State private var password = ""
+    @State private var code = ""
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Spacer()
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Quit")
+            }
+            .padding(.bottom, -14)
+            VStack(spacing: 6) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(Color.accentColor)
+                Text(isCode ? "Two-factor authentication" : "Sign in to Proton VPN")
+                    .font(.title2.weight(.semibold))
+                Text(isCode ? "Enter the 6-digit code from your authenticator app, or a recovery code."
+                            : "With your Proton account.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 6)
+
+            if isCode {
+                field("Code") {
+                    TextField("123456", text: $code).onSubmit(submitCode)
+                }
+                if case .code(invalid: true) = vpn.signIn {
+                    errorText("That code didn't work. Try again.")
+                }
+                primaryButton("Continue", disabled: code.isEmpty, action: submitCode)
+                Button("Cancel") { vpn.cancelSignIn() }
+                    .buttonStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                field("Email or username") {
+                    TextField("", text: $username).textContentType(.username)
+                }
+                field("Password", link: ("Forgot password?", "https://account.proton.me/reset-password")) {
+                    SecureField("", text: $password).textContentType(.password).onSubmit(submit)
+                }
+                if let error = vpn.signInError {
+                    errorText(error)
+                }
+                primaryButton(vpn.signIn == .working ? "Signing in…" : "Sign in",
+                              disabled: username.isEmpty || password.isEmpty || vpn.signIn == .working,
+                              action: submit)
+            }
+
+            Divider()
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "checkmark.shield").foregroundStyle(.secondary)
+                Text("Signs in through Proton VPN's official CLI, straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Link("Create a free account", destination: URL(string: "https://account.protonvpn.com/signup")!)
+                .font(.caption)
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+
+    var isCode: Bool {
+        if case .code = vpn.signIn { return true }
+        return false
+    }
+
+    func field(_ label: String, link: (String, String)? = nil, @ViewBuilder input: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                Spacer()
+                if let link {
+                    Link(link.0, destination: URL(string: link.1)!).font(.caption)
+                }
+            }
+            input()
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
+        }
+    }
+
+    func errorText(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(notConnected)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    func primaryButton(_ title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if vpn.signIn == .working { ProgressView().controlSize(.small).tint(.white) }
+                Text(title).fontWeight(.semibold)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .foregroundStyle(.white)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(disabled ? 0.45 : 1)))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .keyboardShortcut(.defaultAction)
+    }
+
+    func submit() {
+        guard !username.isEmpty, !password.isEmpty else { return }
+        vpn.signIn(username: username, password: password)
+        password = ""
+    }
+
+    func submitCode() {
+        guard !code.isEmpty else { return }
+        vpn.submit(code: code)
+        code = ""
+    }
+}
+
 /// One of the quick settings, like the four in Proton's app.
 struct Toggle: View {
     let title: String
@@ -735,8 +1096,36 @@ struct Panel: View {
     @State private var listHeight: CGFloat = 0
 
     var body: some View {
+        if !cliInstalled {
+            InstallCLI()
+        } else if !vpn.accountLoaded {
+            ProgressView().controlSize(.small).frame(width: 320, height: 80)
+        } else if vpn.account == nil {
+            SignInForm(vpn: vpn)
+        } else {
+            panel
+        }
+    }
+
+    var panel: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+
+            if vpn.needsSetup {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "key.fill").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("One more step").font(.callout.weight(.semibold))
+                        Text("Connecting needs root for WireGuard and the kill switch. Set up once, with your Mac's password, and it won't ask again.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Set Up…") { vpn.runSetup() }.controlSize(.small).disabled(vpn.busy != nil)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+            }
 
             HStack(spacing: 8) {
                 ActionButton(title: "Fastest", symbol: "bolt.fill") { vpn.fastest() }
@@ -809,8 +1198,12 @@ struct Panel: View {
                 HStack(spacing: 0) {
                     ForEach(filters, id: \.feature) { filter in
                         FilterButton(feature: filter.feature, title: filter.title, image: filter.image,
-                                     selected: vpn.filter == filter.feature) {
-                            vpn.filter = vpn.filter == filter.feature ? nil : filter.feature
+                                     selected: vpn.filters.contains(filter.feature)) {
+                            if vpn.filters.contains(filter.feature) {
+                                vpn.filters.remove(filter.feature)
+                            } else {
+                                vpn.filters.insert(filter.feature)
+                            }
                             expanded = nil
                         }
                     }
@@ -824,7 +1217,7 @@ struct Panel: View {
 
             let list = listed
             if list.isEmpty {
-                Text(query.isEmpty && vpn.filter == nil ? "No recent countries with servers for this mode" : "No countries match")
+                Text(query.isEmpty && vpn.filters.isEmpty ? "No recent countries with servers for this mode" : "No countries match")
                     .font(.caption).foregroundStyle(.secondary).padding(8)
             }
             // Scrolls once it's taller than the screen allows, and otherwise fits its rows exactly.
@@ -841,7 +1234,7 @@ struct Panel: View {
                     Color.clear.preference(key: HeightKey.self, value: geometry.size.height)
                 })
             }
-            .frame(height: min(listHeight, 420))
+            .frame(height: min(listHeight, 300))
             .onPreferenceChange(HeightKey.self) { listHeight = $0 }
         }
     }
@@ -892,7 +1285,7 @@ struct Panel: View {
     }
 
     @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
-        let servers = vpn.filter == "streaming" ? city.servers.filter { $0.features.contains("streaming") } : city.servers
+        let servers = vpn.filters.contains("streaming") ? city.servers.filter { $0.features.contains("streaming") } : city.servers
         ForEach(servers.prefix(serverLimit)) { server in
             ServerRow(server: server, country: c.code, current: vpn.status.server == server.name) {
                 vpn.connect(server: server, in: c)
@@ -908,10 +1301,15 @@ struct Panel: View {
         }
     }
 
-    /// Recent countries, all countries with a filtered feature, or search results while typing.
+    /// Recent countries, all countries with the filtered features, or search results while typing.
     var listed: [Country] {
         if !query.isEmpty { return Array(vpn.search(query).prefix(10)) }
-        if vpn.filter != nil { return vpn.available(vpn.countries).sorted { $0.name < $1.name } }
+        if !vpn.filters.isEmpty {
+            // Pinned countries that match stay on top, then the rest from A to Z.
+            let matching = vpn.available(vpn.countries)
+            let pinned = vpn.pinnedCodes.compactMap { code in matching.first { $0.code == code } }
+            return pinned + matching.filter { !vpn.pinnedCodes.contains($0.code) }.sorted { $0.name < $1.name }
+        }
         return vpn.available(vpn.recents)
     }
 
@@ -959,7 +1357,7 @@ struct Panel: View {
             if let busy = vpn.busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(busy).font(.headline).lineLimit(2)
+                    Text(busy).font(.headline).lineLimit(2).padding(.trailing, 50)
                 }
             } else {
                 switch vpn.status.state {
@@ -970,6 +1368,7 @@ struct Panel: View {
                         Text(vpn.status.server ?? "").foregroundStyle(.secondary)
                     }
                     .font(.title3)
+                    .padding(.trailing, 50)
                     .help(vpn.status.city ?? "")
                     HStack(spacing: 4) {
                         ipLabel(vpn.status.ip)
@@ -986,7 +1385,7 @@ struct Panel: View {
                 case "Connecting":
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Connecting to \(vpn.status.server ?? "")…").font(.headline)
+                        Text("Connecting to \(vpn.status.server ?? "")…").font(.headline).padding(.trailing, 50)
                     }
                 case "Dropped":
                     Text("Connection Dropped").font(.title3.weight(.semibold)).foregroundStyle(.orange)
@@ -1002,7 +1401,6 @@ struct Panel: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, 44)
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 10) {
                 // Normally on the country's row, unless the row isn't listed (e.g. while searching).
@@ -1012,15 +1410,24 @@ struct Panel: View {
                         .focusable(false)
                 }
                 Menu {
+                    if let account = vpn.account {
+                        Text(account.username)
+                        Text(account.plan)
+                        Divider()
+                    }
+                    SwiftUI.Toggle("Open at Login", isOn: Binding(get: { vpn.openAtLogin }, set: { vpn.setOpenAtLogin($0) }))
+                    SwiftUI.Toggle("Reconnect on Launch", isOn: $vpn.autoConnect)
+                    SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
+                    Divider()
                     Button("Sign Out") { vpn.signOut() }
                 } label: {
-                    Image(systemName: "person.crop.circle")
+                    Image(systemName: "gearshape")
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Account")
+                .help("Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain)
                     .help("Quit")
@@ -1050,6 +1457,9 @@ struct ProtonVPNMenuBar: App {
             Panel(vpn: vpn)
         } label: {
             Image(nsImage: vpn.icon)
+            if vpn.showFlag, vpn.status.state == "Connected", let code = vpn.status.code {
+                Text(flag(code))
+            }
         }
         .menuBarExtraStyle(.window)
     }
