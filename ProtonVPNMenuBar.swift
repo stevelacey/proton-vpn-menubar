@@ -20,6 +20,14 @@ let dnsChoices: [(String, String)] = [
 /// Proton's pinkish red for "Not Connected".
 let notConnected = Color(red: 0.91, green: 0.42, blue: 0.47)
 
+/// How many of a city's servers to show at a time, least loaded first.
+let serverPage = 8
+
+struct HeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 /// Shown until there are recent countries to replace them.
 let defaultRecents = ["CH", "UK", "US", "DE"]
 let recentsLimit = 6
@@ -52,6 +60,20 @@ struct Country: Decodable, Identifiable, Equatable {
     var aliases: [String]
     var features: [String]
     var id: String { code }
+}
+
+struct Server: Decodable, Identifiable {
+    var name: String
+    var load: Int
+    var entry: String?
+    var features: [String]
+    var id: String { name }
+}
+
+struct City: Decodable, Identifiable {
+    var city: String
+    var servers: [Server]
+    var id: String { city }
 }
 
 /// Runs `vpn` with the given arguments, returning its exit status and output.
@@ -283,13 +305,56 @@ final class VPN: ObservableObject {
         }
     }
 
-    /// Secure Core, or P2P servers when port forwarding is on (it only works on those).
-    private var modeWords: [String] {
-        secureCore ? ["sc"] : settings.portForwarding ? ["p2p"] : []
+    /// The feature the country list is filtered by: p2p, tor or streaming.
+    @Published var filter: String?
+
+    /// Secure Core, Tor or P2P servers when filtered by those, and P2P when port forwarding is on
+    /// (it only works on those).
+    private var mode: String? {
+        if secureCore { return "sc" }
+        if filter == "tor" { return "tor" }
+        if filter == "p2p" || settings.portForwarding { return "p2p" }
+        return nil
     }
 
+    private var modeWords: [String] { mode.map { [$0] } ?? [] }
+
     private var modeLabel: String {
-        secureCore ? " via Secure Core" : settings.portForwarding ? " (P2P)" : ""
+        switch mode {
+        case "sc": return " via Secure Core"
+        case "tor": return " (Tor)"
+        case "p2p": return " (P2P)"
+        default: return ""
+        }
+    }
+
+    /// Server lists by mode and country, fetched as countries are expanded, until the panel closes.
+    @Published private var serverLists: [String: [City]] = [:]
+
+    func cities(_ code: String) -> [City]? { serverLists["\(mode ?? "")\(code)"] }
+
+    func loadServers(_ code: String) async {
+        let key = "\(mode ?? "")\(code)"
+        guard serverLists[key] == nil else { return }
+        let (status, output) = await runVPN(["servers"] + modeWords + [code, "--json"])
+        if status == 0, let decoded = try? JSONDecoder().decode([City].self, from: Data(output.utf8)) {
+            serverLists[key] = decoded
+        }
+    }
+
+    /// Loads change all the time, so lists are fetched again the next time.
+    func forgetServers() { serverLists = [:] }
+
+    func connect(city: String, in country: Country) {
+        guard busy == nil else { return }
+        connectingCode = country.code
+        run("Connecting to \(city)\(modeLabel)…", ["city"] + modeWords + [city])
+    }
+
+    func connect(server: Server, in country: Country) {
+        guard busy == nil else { return }
+        connectingCode = country.code
+        run("Connecting to \(server.name)…", [server.name])
     }
 
     func connect(_ country: Country) {
@@ -326,6 +391,7 @@ final class VPN: ObservableObject {
     /// Countries that have servers for the current mode.
     func available(_ list: [Country]) -> [Country] {
         if secureCore { return list.filter { $0.features.contains("securecore") } }
+        if let filter { return list.filter { $0.features.contains(filter) } }
         if settings.portForwarding { return list.filter { $0.features.contains("p2p") } }
         return list
     }
@@ -427,6 +493,8 @@ struct CountryRow: View {
     let country: Country
     let pinned: Bool
     let togglePin: () -> Void
+    let expanded: Bool
+    let toggleExpanded: () -> Void
     let action: () -> Void
     @State private var hovering = false
 
@@ -438,9 +506,106 @@ struct CountryRow: View {
                 Spacer()
                 FeatureIcons(features: country.features)
                 PinButton(pinned: pinned, visible: hovering, action: togglePin)
+                ExpandButton(expanded: expanded, action: toggleExpanded)
             }
         }
         .onHover { hovering = $0 }
+    }
+}
+
+/// A chevron that shows a country's cities and servers.
+struct ExpandButton: View {
+    let expanded: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(expanded ? "Hide servers" : "Show servers")
+    }
+}
+
+/// A city in an expanded country; connects to its fastest server.
+struct CityRow: View {
+    let city: City
+    let expanded: Bool
+    let toggleExpanded: () -> Void
+    let action: () -> Void
+
+    var body: some View {
+        HoverButton(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "mappin.and.ellipse").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
+                Text(city.city)
+                Spacer()
+                Text("\(city.servers.count)").font(.caption).foregroundStyle(.secondary)
+                ExpandButton(expanded: expanded, action: toggleExpanded)
+            }
+        }
+        .padding(.leading, 16)
+    }
+}
+
+/// A server, with its load like Proton's app; connects to it.
+struct ServerRow: View {
+    let server: Server
+    let country: String
+    let current: Bool
+    let action: () -> Void
+
+    var loadColor: Color { server.load < 75 ? .green : server.load < 90 ? .yellow : .red }
+
+    var body: some View {
+        HoverButton(action: action) {
+            HStack(spacing: 8) {
+                Text(server.name).fontWeight(current ? .semibold : .regular).monospacedDigit()
+                if let entry = server.entry, entry != country {
+                    Text("via \(flag(entry))").font(.caption).foregroundStyle(.secondary)
+                }
+                if current {
+                    Circle().fill(.green).frame(width: 6, height: 6)
+                }
+                Spacer()
+                FeatureIcons(features: server.features)
+                Capsule().fill(Color.primary.opacity(0.12)).frame(width: 28, height: 4)
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(loadColor).frame(width: 28 * CGFloat(min(server.load, 100)) / 100, height: 4)
+                    }
+                Text("\(server.load)%").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .frame(width: 30, alignment: .trailing)
+            }
+        }
+        .padding(.leading, 16)
+    }
+}
+
+/// A feature filter beside the search field.
+struct FilterButton: View {
+    let feature: String
+    let title: String
+    let image: Image
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            image
+                .resizable()
+                .scaledToFit()
+                .frame(width: 11, height: 11)
+                .padding(4)
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                .background(RoundedRectangle(cornerRadius: 5).fill(selected ? Color.accentColor : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(selected ? "Showing \(title) countries only" : "Show \(title) countries only")
     }
 }
 
@@ -467,6 +632,8 @@ struct PinButton: View {
 struct ActiveCountryRow: View {
     let country: Country
     let state: String
+    let expanded: Bool
+    let toggleExpanded: () -> Void
     let disconnect: () -> Void
     @State private var hovering = false
 
@@ -493,6 +660,7 @@ struct ActiveCountryRow: View {
             }
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
+            ExpandButton(expanded: expanded, action: toggleExpanded)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -561,6 +729,10 @@ struct ActionButton: View {
 struct Panel: View {
     @ObservedObject var vpn: VPN
     @State private var query = ""
+    @State private var expanded: String?
+    @State private var expandedCity: String?
+    @State private var serverLimit = serverPage
+    @State private var listHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -610,7 +782,11 @@ struct Panel: View {
                 await vpn.loadPublicIP()
             }
         }
-        .onDisappear { query = "" }
+        .onDisappear {
+            query = ""
+            expanded = nil
+            vpn.forgetServers()
+        }
     }
 
     @ViewBuilder var countries: some View {
@@ -630,35 +806,121 @@ struct Panel: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                 }
+                HStack(spacing: 0) {
+                    ForEach(filters, id: \.feature) { filter in
+                        FilterButton(feature: filter.feature, title: filter.title, image: filter.image,
+                                     selected: vpn.filter == filter.feature) {
+                            vpn.filter = vpn.filter == filter.feature ? nil : filter.feature
+                            expanded = nil
+                        }
+                    }
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.leading, 8)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
             .padding(.bottom, 4)
 
             let list = listed
             if list.isEmpty {
-                Text(query.isEmpty ? "No recent countries with servers for this mode" : "No countries match")
+                Text(query.isEmpty && vpn.filter == nil ? "No recent countries with servers for this mode" : "No countries match")
                     .font(.caption).foregroundStyle(.secondary).padding(8)
             }
-            // Plain rows rather than a scroll view, so the panel grows to fit them.
-            ForEach(list) { c in
-                if c.code == vpn.activeCode {
-                    // The current connection stays in its place, highlighted, with the Disconnect button.
-                    ActiveCountryRow(country: c, state: vpn.activeState) { vpn.disconnect() }
-                } else {
-                CountryRow(country: c, pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) }) {
-                    vpn.connect(c)
-                    query = ""
+            // Scrolls once it's taller than the screen allows, and otherwise fits its rows exactly.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(list) { c in
+                        row(c)
+                        if expanded == c.code {
+                            servers(c)
+                        }
+                    }
                 }
-                }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: HeightKey.self, value: geometry.size.height)
+                })
+            }
+            .frame(height: min(listHeight, 420))
+            .onPreferenceChange(HeightKey.self) { listHeight = $0 }
+        }
+    }
+
+    @ViewBuilder func row(_ c: Country) -> some View {
+        let toggle = {
+            expandedCity = nil
+            serverLimit = serverPage
+            expanded = expanded == c.code ? nil : c.code
+            if expanded != nil { Task { await vpn.loadServers(c.code) } }
+        }
+        if c.code == vpn.activeCode {
+            // The current connection stays in its place, highlighted, with the Disconnect button.
+            ActiveCountryRow(country: c, state: vpn.activeState, expanded: expanded == c.code,
+                             toggleExpanded: toggle) { vpn.disconnect() }
+        } else {
+            CountryRow(country: c, pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) },
+                       expanded: expanded == c.code, toggleExpanded: toggle) {
+                vpn.connect(c)
+                query = ""
             }
         }
     }
 
-    /// Recent countries, or search results while typing.
+    /// An expanded country's cities, or its servers when it only has one city.
+    @ViewBuilder func servers(_ c: Country) -> some View {
+        if let cities = vpn.cities(c.code) {
+            if cities.isEmpty {
+                Text("No servers for this mode").font(.caption).foregroundStyle(.secondary).padding(.leading, 24)
+            } else if cities.count == 1 {
+                serverRows(cities[0], in: c)
+            } else {
+                ForEach(cities) { city in
+                    CityRow(city: city, expanded: expandedCity == city.city, toggleExpanded: {
+                        serverLimit = serverPage
+                        expandedCity = expandedCity == city.city ? nil : city.city
+                    }) {
+                        vpn.connect(city: city.city, in: c)
+                    }
+                    if expandedCity == city.city {
+                        serverRows(city, in: c).padding(.leading, 16)
+                    }
+                }
+            }
+        } else {
+            ProgressView().controlSize(.small).padding(.leading, 24)
+        }
+    }
+
+    @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
+        let servers = vpn.filter == "streaming" ? city.servers.filter { $0.features.contains("streaming") } : city.servers
+        ForEach(servers.prefix(serverLimit)) { server in
+            ServerRow(server: server, country: c.code, current: vpn.status.server == server.name) {
+                vpn.connect(server: server, in: c)
+            }
+        }
+        if servers.count > serverLimit {
+            Button("Show more (\(servers.count - serverLimit))") { serverLimit += serverPage }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 24)
+                .padding(.vertical, 4)
+        }
+    }
+
+    /// Recent countries, all countries with a filtered feature, or search results while typing.
     var listed: [Country] {
-        query.isEmpty ? vpn.available(vpn.recents) : Array(vpn.search(query).prefix(10))
+        if !query.isEmpty { return Array(vpn.search(query).prefix(10)) }
+        if vpn.filter != nil { return vpn.available(vpn.countries).sorted { $0.name < $1.name } }
+        return vpn.available(vpn.recents)
+    }
+
+    var filters: [(feature: String, title: String, image: Image)] {
+        [
+            ("p2p", "P2P", Image(systemName: "arrow.left.arrow.right")),
+            ("tor", "Tor", Image(nsImage: resource("ic-brand-tor"))),
+            ("streaming", "streaming", Image(systemName: "play")),
+        ]
     }
 
     /// A small DNS dropdown, like a label.
