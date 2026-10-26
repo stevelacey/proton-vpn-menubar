@@ -11,7 +11,18 @@ let connectionDirectory = FileManager.default.homeDirectoryForCurrentUser
 let settingsDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".config/Proton/VPN").path
 
-let defaultFavorites = ["CH", "UK", "US", "DE"]
+/// DNS choices, as `vpn dns` names and labels.
+let dnsChoices: [(String, String)] = [
+    ("proton", "Proton"), ("cloudflare", "Cloudflare"), ("google", "Google"),
+    ("opendns", "OpenDNS"), ("quad9", "Quad9"),
+]
+
+/// Proton's pinkish red for "Not Connected".
+let notConnected = Color(red: 0.91, green: 0.42, blue: 0.47)
+
+/// Shown until there are recent countries to replace them.
+let defaultRecents = ["CH", "UK", "US", "DE"]
+let recentsLimit = 6
 
 struct Status: Decodable, Equatable {
     var state: String
@@ -27,9 +38,10 @@ struct Settings: Decodable, Equatable {
     var netshield = 1
     var killSwitch = 0
     var portForwarding = false
+    var dns = "proton"
 
     enum CodingKeys: String, CodingKey {
-        case netshield, killSwitch = "kill_switch", portForwarding = "port_forwarding"
+        case netshield, killSwitch = "kill_switch", portForwarding = "port_forwarding", dns
     }
 }
 
@@ -126,7 +138,17 @@ final class VPN: ObservableObject {
             animate()
             if status != oldValue { message = nil }
             keepPortForwarded()
+            if status.state == "Connected", let code = status.code { remember(code) }
+            if status.state != oldValue.state { Task { await loadPublicIP() } }
         }
+    }
+    /// The IP address sites see while disconnected.
+    @Published var publicIP: String?
+    @Published var pinnedCodes = UserDefaults.standard.stringArray(forKey: "pinned") ?? [] {
+        didSet { UserDefaults.standard.set(pinnedCodes, forKey: "pinned") }
+    }
+    @Published var recentCodes = UserDefaults.standard.stringArray(forKey: "recents") ?? defaultRecents {
+        didSet { UserDefaults.standard.set(recentCodes, forKey: "recents") }
     }
     @Published var settings = Settings() { didSet { keepPortForwarded() } }
     private var forwarder: Process?
@@ -176,10 +198,39 @@ final class VPN: ObservableObject {
         watchers.append(source)
     }
 
-    var favorites: [Country] {
-        (UserDefaults.standard.stringArray(forKey: "favorites") ?? defaultFavorites).compactMap { code in
-            countries.first { $0.code == code }
+    /// Countries most recently connected to, wherever from (here, the CLI or Alfred), newest first.
+    /// Pinned countries, then recent ones.
+    var recents: [Country] {
+        (pinnedCodes + recentCodes.filter { !pinnedCodes.contains($0) })
+            .compactMap { code in countries.first { $0.code == code } }
+    }
+
+    func togglePin(_ code: String) {
+        if pinnedCodes.contains(code) {
+            pinnedCodes.removeAll { $0 == code }
+        } else {
+            pinnedCodes.append(code)
         }
+    }
+
+    /// The country being connected to from here, before the CLI has reported anything.
+    @Published var connectingCode: String?
+
+    /// The country of the current connection, whether connected, connecting or dropped.
+    var activeCode: String? {
+        if let connectingCode { return connectingCode }
+        guard status.state != "Disconnected" else { return nil }
+        if let code = status.code { return code }
+        // Connecting from elsewhere only reports the server, e.g. CH#871, or IS-CH#1 via Secure Core.
+        return status.server?.split(separator: "#").first?.split(separator: "-").last.map(String.init)
+    }
+
+    var activeState: String { connectingCode != nil ? "Connecting" : status.state }
+
+    /// Adds a newly used country to the top; ones already listed stay put, so the list doesn't shuffle.
+    private func remember(_ code: String) {
+        guard !recentCodes.contains(code) else { return }
+        recentCodes = Array(([code] + recentCodes).prefix(recentsLimit))
     }
 
     func refresh(force: Bool = false) async {
@@ -191,6 +242,17 @@ final class VPN: ObservableObject {
         await loadSettings()
         // The server list only exists once signed in.
         if countries.isEmpty { await loadCountries() }
+    }
+
+    /// Looks up the IP address that's exposed while disconnected, with Cloudflare's trace page.
+    func loadPublicIP() async {
+        guard status.state == "Disconnected" else { publicIP = nil; return }
+        var request = URLRequest(url: URL(string: "https://1.1.1.1/cdn-cgi/trace")!)
+        request.timeoutInterval = 5
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return }
+        let ip = String(decoding: data, as: UTF8.self).split(separator: "\n")
+            .first { $0.hasPrefix("ip=") }?.dropFirst(3)
+        if status.state == "Disconnected", let ip { publicIP = String(ip) }
     }
 
     func loadSettings() async {
@@ -214,6 +276,7 @@ final class VPN: ObservableObject {
         Task {
             let (code, output) = await runVPN(arguments)
             busy = nil
+            connectingCode = nil
             let lines = output.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             await refresh()
             message = code == 0 ? nil : (lines.first { $0.hasPrefix("Error") } ?? lines.last ?? "Failed")
@@ -229,10 +292,15 @@ final class VPN: ObservableObject {
         secureCore ? " via Secure Core" : settings.portForwarding ? " (P2P)" : ""
     }
 
-    func connect(_ country: Country) { run("Connecting to \(country.name)\(modeLabel)…", modeWords + [country.code]) }
+    func connect(_ country: Country) {
+        guard busy == nil else { return }
+        connectingCode = country.code
+        run("Connecting to \(country.name)\(modeLabel)…", modeWords + [country.code])
+    }
     func fastest() { run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"]) }
     func random() { run("Connecting to a random server\(modeLabel)…", modeWords + ["random"]) }
     func disconnect() { run("Disconnecting…", ["off"]) }
+    func signOut() { run("Signing out…", ["signout"]) }
 
     func toggleNetShield() {
         let on = settings.netshield == 0
@@ -242,6 +310,12 @@ final class VPN: ObservableObject {
     func toggleKillSwitch() {
         let on = settings.killSwitch == 0
         run("Turning the kill switch \(on ? "on" : "off")…", ["set", "kill-switch", on ? "standard" : "off"])
+    }
+
+    func setDNS(_ choice: String) {
+        guard choice != settings.dns else { return }
+        let label = dnsChoices.first { $0.0 == choice }?.1 ?? choice
+        run("Switching DNS to \(label)…", ["dns", choice])
     }
 
     func togglePortForwarding() {
@@ -351,21 +425,89 @@ struct FeatureIcons: View {
 
 struct CountryRow: View {
     let country: Country
-    let current: Bool
+    let pinned: Bool
+    let togglePin: () -> Void
     let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         HoverButton(action: action) {
             HStack(spacing: 8) {
                 Text(flag(country.code))
-                Text(country.name).fontWeight(current ? .semibold : .regular)
+                Text(country.name)
                 Spacer()
                 FeatureIcons(features: country.features)
-                if current {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accentColor)
-                }
+                PinButton(pinned: pinned, visible: hovering, action: togglePin)
             }
         }
+        .onHover { hovering = $0 }
+    }
+}
+
+/// A star that pins a country to the top of the list: always shown once pinned, otherwise on hover.
+struct PinButton: View {
+    let pinned: Bool
+    let visible: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: pinned ? "star.fill" : "star")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+        }
+        .buttonStyle(.plain)
+        .opacity(pinned || visible ? 1 : 0)
+        .help(pinned ? "Unpin" : "Pin to the top")
+    }
+}
+
+/// The country connected to (or connecting or dropped), tinted by state, with the Disconnect button.
+struct ActiveCountryRow: View {
+    let country: Country
+    let state: String
+    let disconnect: () -> Void
+    @State private var hovering = false
+
+    var tint: Color {
+        switch state {
+        case "Connected": return .green
+        case "Dropped": return .orange
+        default: return .accentColor
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(flag(country.code))
+            Text(country.name).fontWeight(.semibold)
+            Spacer()
+            FeatureIcons(features: country.features)
+            Button(action: disconnect) {
+                Text(state == "Connecting" ? "Cancel" : "Disconnect")
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.primary.opacity(hovering ? 0.25 : 0.14)))
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background {
+            if state == "Connecting" {
+                // Pulses while connecting.
+                TimelineView(.animation) { timeline in
+                    let pulse = (sin(timeline.date.timeIntervalSinceReferenceDate * 4) + 1) / 2
+                    RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.1 + 0.25 * pulse))
+                }
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.18))
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(tint.opacity(0.45)))
     }
 }
 
@@ -376,6 +518,7 @@ struct Toggle: View {
     let on: Bool
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
@@ -386,7 +529,7 @@ struct Toggle: View {
                     .frame(width: 16, height: 16)
                 Text(title).font(.system(size: 10))
             }
-            .foregroundStyle(on ? Color.white : Color.primary)
+            .foregroundStyle(on ? Color.white : enabled ? Color.primary : Color.secondary.opacity(0.6))
             .frame(maxWidth: .infinity, minHeight: 46)
             .background(
                 RoundedRectangle(cornerRadius: 8)
@@ -394,8 +537,7 @@ struct Toggle: View {
             )
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("\(title) \(on ? "on" : "off")")
+        .onHover { hovering = $0 && enabled }
     }
 }
 
@@ -433,8 +575,17 @@ struct Panel: View {
                 Toggle(title: "Secure Core", image: Image(nsImage: resource("ic-lock")), on: vpn.secureCore) {
                     vpn.secureCore.toggle()
                 }
-                Toggle(title: "NetShield", image: Image(nsImage: resource("ic-shield")), on: vpn.settings.netshield > 0) {
+                // NetShield filters Proton's DNS, so it does nothing with another provider's.
+                Toggle(title: "NetShield", image: Image(nsImage: resource("ic-shield")),
+                       on: vpn.settings.netshield > 0 && vpn.settings.dns == "proton") {
                     vpn.toggleNetShield()
+                }
+                .disabled(vpn.settings.dns != "proton")
+                .overlay {
+                    // Disabled buttons show no tooltip, so it goes on a layer above.
+                    if vpn.settings.dns != "proton" {
+                        Color.clear.contentShape(Rectangle()).help("NetShield only works with Proton's DNS")
+                    }
                 }
                 Toggle(title: "Kill Switch", image: Image(nsImage: resource("ic-killswitch")), on: vpn.settings.killSwitch > 0) {
                     vpn.toggleKillSwitch()
@@ -445,24 +596,20 @@ struct Panel: View {
             }
             .disabled(vpn.busy != nil)
 
+
             Divider()
 
             countries
-
-            Divider()
-            HStack {
-                Text("Proton VPN").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 4)
         }
         .padding(12)
         .frame(width: 320)
-        .onAppear { Task { await vpn.refresh() } }
+        .onAppear {
+            Task {
+                await vpn.refresh()
+                // The network may have changed since.
+                await vpn.loadPublicIP()
+            }
+        }
         .onDisappear { query = "" }
     }
 
@@ -489,74 +636,146 @@ struct Panel: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
             .padding(.bottom, 4)
 
-            let list = query.isEmpty ? vpn.available(vpn.favorites) : Array(vpn.search(query).prefix(10))
+            let list = listed
             if list.isEmpty {
-                Text(query.isEmpty ? "No favorites with servers for this mode" : "No countries match")
+                Text(query.isEmpty ? "No recent countries with servers for this mode" : "No countries match")
                     .font(.caption).foregroundStyle(.secondary).padding(8)
             }
             // Plain rows rather than a scroll view, so the panel grows to fit them.
             ForEach(list) { c in
-                CountryRow(country: c, current: vpn.status.state == "Connected" && vpn.status.code == c.code) {
+                if c.code == vpn.activeCode {
+                    // The current connection stays in its place, highlighted, with the Disconnect button.
+                    ActiveCountryRow(country: c, state: vpn.activeState) { vpn.disconnect() }
+                } else {
+                CountryRow(country: c, pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) }) {
                     vpn.connect(c)
                     query = ""
+                }
                 }
             }
         }
     }
 
+    /// Recent countries, or search results while typing.
+    var listed: [Country] {
+        query.isEmpty ? vpn.available(vpn.recents) : Array(vpn.search(query).prefix(10))
+    }
+
+    /// A small DNS dropdown, like a label.
+    var dnsMenu: some View {
+        let current = dnsChoices.first { $0.0 == vpn.settings.dns }?.1 ?? "Custom"
+        return Menu {
+            ForEach(dnsChoices, id: \.0) { choice in
+                Button {
+                    vpn.setDNS(choice.0)
+                } label: {
+                    if choice.0 == vpn.settings.dns {
+                        Label(choice.1, systemImage: "checkmark")
+                    } else {
+                        Text(choice.1)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Text("DNS: \(current)")
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        // A plain button style, so the label keeps the IP's size and color.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(vpn.busy != nil)
+    }
+
     @ViewBuilder var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                if let busy = vpn.busy {
+        VStack(alignment: .leading, spacing: 4) {
+            if let busy = vpn.busy {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(busy).font(.headline).lineLimit(2)
+                }
+            } else {
+                switch vpn.status.state {
+                case "Connected":
+                    HStack(spacing: 6) {
+                        Text(flag(vpn.status.code ?? ""))
+                        Text(vpn.status.country ?? "").fontWeight(.semibold)
+                        Text(vpn.status.server ?? "").foregroundStyle(.secondary)
+                    }
+                    .font(.title3)
+                    .help(vpn.status.city ?? "")
+                    HStack(spacing: 4) {
+                        ipLabel(vpn.status.ip)
+                        Spacer()
+                        dnsMenu
+                    }
+                    if let port = vpn.status.port {
+                        HStack(spacing: 4) {
+                            Text("Forwarded port:").foregroundStyle(.secondary)
+                            Text(String(port)).fontWeight(.semibold).textSelection(.enabled)
+                        }
+                        .font(.callout)
+                    }
+                case "Connecting":
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text(busy).font(.headline).lineLimit(2)
+                        Text("Connecting to \(vpn.status.server ?? "")…").font(.headline)
                     }
-                } else {
-                    switch vpn.status.state {
-                    case "Connected":
-                        HStack(spacing: 6) {
-                            Circle().fill(.green).frame(width: 8, height: 8)
-                            Text("Connected").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Text("\(flag(vpn.status.code ?? "")) \(vpn.status.server ?? "")").font(.title3.weight(.semibold))
-                        Text([vpn.status.city, vpn.status.country].compactMap { $0 }.joined(separator: ", "))
-                        if let ip = vpn.status.ip {
-                            Text("IP \(ip)").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                        }
-                        if let port = vpn.status.port {
-                            Text("Forwarded port \(String(port))").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                        }
-                    case "Connecting":
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Connecting to \(vpn.status.server ?? "")…").font(.headline)
-                        }
-                    case "Dropped":
-                        HStack(spacing: 6) {
-                            Circle().fill(.orange).frame(width: 8, height: 8)
-                            Text("Connection dropped").font(.headline)
-                        }
-                        Text(vpn.status.server ?? "").foregroundStyle(.secondary)
-                    default:
-                        HStack(spacing: 6) {
-                            Circle().fill(.red).frame(width: 8, height: 8)
-                            Text("Disconnected").font(.headline)
-                        }
-                        Text("Unprotected").font(.callout).foregroundStyle(.secondary)
-                    }
-                }
-                if let message = vpn.message {
-                    Text(message).foregroundStyle(.red).font(.caption).lineLimit(3)
+                case "Dropped":
+                    Text("Connection Dropped").font(.title3.weight(.semibold)).foregroundStyle(.orange)
+                    Text("\(vpn.status.server ?? "The server") stopped responding").font(.callout).foregroundStyle(.secondary)
+                default:
+                    Text("Not Connected").font(.title3.weight(.semibold)).foregroundStyle(notConnected)
+                    // DNS only applies to the tunnel, so there's nothing to pick while disconnected.
+                    ipLabel(vpn.publicIP)
                 }
             }
-            Spacer()
-            if vpn.status.state != "Disconnected" && vpn.busy == nil {
-                Button("Disconnect") { vpn.disconnect() }
-                    .controlSize(.small)
+            if let message = vpn.message {
+                Text(message).foregroundStyle(.red).font(.caption).lineLimit(3)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, 44)
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 10) {
+                // Normally on the country's row, unless the row isn't listed (e.g. while searching).
+                if vpn.status.state != "Disconnected" && vpn.busy == nil && !listed.contains(where: { $0.code == vpn.activeCode }) {
+                    Button("Disconnect") { vpn.disconnect() }
+                        .controlSize(.small)
+                        .focusable(false)
+                }
+                Menu {
+                    Button("Sign Out") { vpn.signOut() }
+                } label: {
+                    Image(systemName: "person.crop.circle")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Account")
+                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                    .buttonStyle(.plain)
+                    .help("Quit")
+            }
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+        }
         .padding(.horizontal, 4)
+    }
+
+    /// "IP: 1.2.3.4", as in Proton's app.
+    func ipLabel(_ ip: String?) -> some View {
+        HStack(spacing: 4) {
+            Text("IP:").foregroundStyle(.secondary)
+            Text(ip ?? "…").fontWeight(.semibold).textSelection(.enabled)
+        }
+        .font(.callout)
     }
 }
 
