@@ -5,6 +5,23 @@ on:
   push: ~
 
 jobs:
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: swift test --enable-code-coverage
+      - name: Export coverage
+        run: |
+          bin=$(swift build --show-bin-path)
+          xcrun llvm-cov export -format=lcov -instr-profile "$bin/codecov/default.profdata" \
+            "$bin/ProtonVPNMenuBarPackageTests.xctest/Contents/MacOS/ProtonVPNMenuBarPackageTests" \
+            -ignore-filename-regex '(Tests|\.build)/' > coverage.lcov
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.lcov
+
   build:
     name: Build
     runs-on: macos-latest

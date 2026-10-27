@@ -1,0 +1,5 @@
+# The SwiftUI views and the app's wiring to macOS aren't unit tested; the logic they use is.
+ignore:
+  - Sources/ProtonVPNMenuBar/App.swift
+  - Sources/ProtonVPNMenuBar/Panel.swift
+  - Sources/ProtonVPNMenuBar/Views.swift

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Proton VPN Menu Bar.app into .build/, with the Command Line Tools' swiftc.
+# Builds Proton VPN Menu Bar.app into .build/ with Swift Package Manager.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -10,12 +10,12 @@ cp Info.plist "$app/Contents/"
 mkdir -p "$app/Contents/Resources"
 cp Resources/* "$app/Contents/Resources/"
 # Apple Silicon only, unless --universal adds Intel.
-targets=(arm64-apple-macos14)
-[[ "${1:-}" == --universal ]] && targets+=(x86_64-apple-macos14)
+targets=(arm64-apple-macosx14.0)
+[[ "${1:-}" == --universal ]] && targets+=(x86_64-apple-macosx14.0)
 binaries=()
 for target in "${targets[@]}"; do
-    swiftc -O -parse-as-library -target "$target" ProtonVPNMenuBar.swift -o ".build/ProtonVPNMenuBar-$target"
-    binaries+=(".build/ProtonVPNMenuBar-$target")
+    swift build -c release --product ProtonVPNMenuBar --triple "$target" >&2
+    binaries+=(".build/${target%%14.0}/release/ProtonVPNMenuBar")
 done
 lipo -create "${binaries[@]}" -output "$app/Contents/MacOS/ProtonVPNMenuBar"
 codesign --force --sign - "$app"

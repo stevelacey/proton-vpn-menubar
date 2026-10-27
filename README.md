@@ -2,6 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/stevelacey/proton-vpn-menubar?style=flat-square)](https://github.com/stevelacey/proton-vpn-menubar/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/stevelacey/proton-vpn-menubar/ci.yml?branch=main&style=flat-square)](https://github.com/stevelacey/proton-vpn-menubar/actions/workflows/ci.yml?query=branch:main)
+[![Coverage](https://img.shields.io/codecov/c/github/stevelacey/proton-vpn-menubar/main?style=flat-square)](https://codecov.io/gh/stevelacey/proton-vpn-menubar)
 [![Downloads](https://img.shields.io/github/downloads/stevelacey/proton-vpn-menubar/total?style=flat-square)](https://github.com/stevelacey/proton-vpn-menubar/releases)
 [![License](https://img.shields.io/github/license/stevelacey/proton-vpn-menubar?style=flat-square)](LICENSE)
 
@@ -51,7 +52,8 @@ Requires macOS 14 or later.
 ## Development
 
 ```sh
-./build      # builds .build/Proton VPN Menu Bar.app with the Command Line Tools' swiftc
+swift test   # runs the tests
+./build      # builds .build/Proton VPN Menu Bar.app
 ./install    # installs it to ~/Applications and opens it
 ```
 
