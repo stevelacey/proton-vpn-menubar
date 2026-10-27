@@ -1393,7 +1393,7 @@ struct ActiveCountryRow: View {
     let alfred = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.runningwithcrayons.Alfred") != nil
     let lines: [[NSAttributedString]] = [
         [text("A small menu bar app for Proton VPN, compatible with the "),
-         link("Proton VPN CLI macOS fork", "https://github.com/stevelacey/proton-vpn-cli-macos"), text(".")],
+         link("Proton VPN CLI for macOS", "https://github.com/stevelacey/proton-vpn-cli-macos"), text(".")],
         alfred ? [text(" There's also an "), link("Alfred workflow", "https://github.com/stevelacey/alfred-proton-vpn"), text(".")] : [],
         [text("\n\n")],
         [link("Fork on GitHub", "https://github.com/stevelacey/proton-vpn-menubar"), NSAttributedString(string: "  ·  "),
@@ -1633,7 +1633,7 @@ struct InstallCLI: View {
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
             }
-            Text("This app runs on the Proton VPN CLI, forked for macOS. Install it with Homebrew:")
+            Text("This app runs on the Proton VPN CLI for macOS. Install it with Homebrew:")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -1715,7 +1715,7 @@ struct SignInForm: View {
             Divider()
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "checkmark.shield").foregroundStyle(.secondary)
-                Text("Signs in with the Proton VPN CLI (forked for macOS), straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
+                Text("Signs in with the Proton VPN CLI for macOS, straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

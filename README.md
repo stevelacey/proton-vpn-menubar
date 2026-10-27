@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/stevelacey/proton-vpn-menubar?style=flat-square)](LICENSE)
 
 A small menu bar app for Proton VPN on macOS, built on the
-[Proton VPN CLI (forked for macOS)](https://github.com/stevelacey/proton-vpn-cli-macos). It does
+[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos). It does
 what you need from the menu bar and nothing else: no windows, no dock icon.
 
 <img src="menubar-icons.png" alt="The menu bar icon connected in Switzerland, the US, the UK, the Netherlands, Germany, Japan and Sweden" width="500">
@@ -18,7 +18,7 @@ what you need from the menu bar and nothing else: no windows, no dock icon.
 
 ## Better together
 
-- **[Proton VPN CLI](https://github.com/stevelacey/proton-vpn-cli-macos)**, forked for macOS: `vpn` and `protonvpn` in your terminal
+- **[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos)**: `vpn` and `protonvpn` in your terminal
 - **[Alfred Proton VPN](https://github.com/stevelacey/alfred-proton-vpn)**: `vpn swiss` from Alfred
 
 They all drive the same connection: connect from one and the others keep up. Use them instead of
