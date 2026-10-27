@@ -38,8 +38,7 @@ Proton's Mac app, not alongside it, since it runs its own VPN connection that th
 ## Install
 
 ```sh
-brew install stevelacey/tap/proton-vpn-cli
-brew install --cask stevelacey/tap/proton-vpn-menubar
+brew install stevelacey/tap/proton-vpn-cli stevelacey/tap/proton-vpn-menubar
 ```
 
 The app asks once for your Mac's password to set up the
