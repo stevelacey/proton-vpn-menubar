@@ -14,6 +14,13 @@ final class FakeVPN: @unchecked Sendable {
     init() {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("vpn-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try! FileManager.default.createSymbolicLink(atPath: path, withDestinationPath: Self.script)
+    }
+
+    /// The script, one file for every fake: macOS checks each new executable the first time it runs,
+    /// one at a time, which with a file per test held them up for seconds when they ran together.
+    private static let script: String = {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("proton-vpn-menubar-fake-vpn").path
         let script = #"""
         #!/bin/bash
         dir="$(dirname "$0")"
@@ -33,8 +40,13 @@ final class FakeVPN: @unchecked Sendable {
         [ -f "$dir/$key.code" ] && exit "$(cat "$dir/$key.code")"
         exit 0
         """#
-        FileManager.default.createFile(atPath: path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
-    }
+        // Kept from one run to the next, unless the script changes.
+        if FileManager.default.contents(atPath: path) != Data(script.utf8) {
+            try? FileManager.default.removeItem(atPath: path)
+            FileManager.default.createFile(atPath: path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o755])
+        }
+        return path
+    }()
 
     deinit { try? FileManager.default.removeItem(at: directory) }
 
