@@ -365,9 +365,8 @@ final class VPN: ObservableObject {
             if busy == "Disconnecting…" && status.state == "Disconnected" { busy = nil }
         }
     }
-    /// The IP address sites see while disconnected, and its country, kept while connecting.
+    /// The IP address sites see while disconnected, kept while connecting.
     @Published var publicIP: String?
-    @Published var publicCode: String?
     /// The network's DNS servers, which are in use while disconnected.
     @Published var systemDNS: String?
     /// Bytes per second down and up through the tunnel.
@@ -515,7 +514,6 @@ final class VPN: ObservableObject {
         }, uniquingKeysWith: { a, _ in a })
         if status.state == "Disconnected", let ip = fields["ip"] {
             publicIP = ip
-            publicCode = fields["loc"]
         }
     }
 
@@ -588,7 +586,9 @@ final class VPN: ObservableObject {
             await refresh()
             // A failure is old news if you've since connected somewhere else, e.g. from Alfred.
             let connectedSince = status.state == "Connected" && status != before
-            message = code == 0 || connectedSince ? nil : (lines.first { $0.hasPrefix("Error") } ?? lines.last ?? "Failed")
+            // Red says it's an error, so without Proton's "Error: ".
+            message = code == 0 || connectedSince ? nil
+                : (lines.first { $0.hasPrefix("Error") } ?? lines.last ?? "Failed").replacingOccurrences(of: #"^Error:\s*"#, with: "", options: .regularExpression)
         }
     }
 
@@ -940,7 +940,8 @@ final class VPN: ObservableObject {
 
     func setNetShield(_ level: Int) {
         guard level != settings.netshield, let name = NetShieldLevel.all.first(where: { $0.level == level }) else { return }
-        run("NetShield: \(name.title)…", ["set", "netshield", name.value])
+        // Short enough for the title, which the card already says the level beside.
+        run(level == 0 ? "Turning NetShield off…" : "Updating NetShield…", ["set", "netshield", name.value])
     }
 
     func setKillSwitch(_ on: Bool) {
@@ -951,7 +952,7 @@ final class VPN: ObservableObject {
     func setDNS(_ choice: String) {
         guard choice != settings.dns else { return }
         let label = dnsChoices.first { $0.0 == choice }?.1 ?? choice
-        run("Switching DNS to \(label)…", ["dns", choice])
+        run("Switching to \(label) DNS…", ["dns", choice])
     }
 
     func setPortForwarding(_ on: Bool) {
@@ -1054,7 +1055,7 @@ let featureTips = [
     "p2p": "P2P: best for BitTorrent and file sharing",
     "tor": "Tor over VPN: through the Tor network, slower but more private",
     "streaming": "Streaming: Netflix, Disney+ and more from anywhere",
-    "smartrouting": "Smart Routing: faster and safer in hard-to-serve countries",
+    "smartrouting": "Smart Routing: a virtual location, served from a nearby country",
 ]
 
 struct FeatureIcons: View {
@@ -1156,8 +1157,6 @@ struct ServerRow: View {
                 Spacer()
                 FeatureIcons(features: server.features)
                 LoadBar(load: server.load)
-                Text("\(server.load)%").font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                    .frame(width: 30, alignment: .trailing)
             }
         }
         .padding(.leading, 16)
@@ -1174,6 +1173,22 @@ struct LoadBar: View {
                 Capsule().fill(load < 75 ? .green : load < 90 ? .yellow : .red)
                     .frame(width: 28 * CGFloat(min(load, 100)) / 100, height: 4)
             }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .tip("Load: \(load)%")
+    }
+}
+
+/// Copies a value, such as the forwarded port, to the clipboard.
+struct CopyButton: View {
+    let value: String
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+        } label: { Image(systemName: "doc.on.doc") }
+            .buttonStyle(.plain).pointingHand().tip("Copy")
     }
 }
 
@@ -1455,6 +1470,20 @@ struct FeatureCard: View {
                         OptionRow(option: content.options[index]) { vpn.card = nil }
                     }
                 }
+                if feature == .portForwarding, let port = vpn.status.port {
+                    // Like Proton's: the port in a box of its own, ready to copy.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Active port number").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 3).fill(.green).frame(width: 10, height: 10)
+                            Text(String(port)).font(.title2.weight(.medium)).monospacedDigit().textSelection(.enabled)
+                            CopyButton(value: String(port)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+                }
                 if let note = content.note {
                     Text(note)
                         .font(.caption)
@@ -1501,7 +1530,8 @@ struct FeatureCard: View {
                     "Lets incoming connections reach you through the VPN, for torrenting, games and hosting. It only works on P2P servers, so you'll connect to one.",
                     [Option(title: "Port Forwarding Off", image: Icon.portForwarding(false), selected: !on) { vpn.setPortForwarding(false) },
                      Option(title: "Port Forwarding On", image: Icon.portForwarding(true), selected: on) { vpn.setPortForwarding(true) }],
-                    vpn.status.port.map { "Forwarded port: \($0)" } ?? "Only use it with apps you trust: the port is open to the internet.")
+                    vpn.status.port != nil ? "Enter the active port number into your BitTorrent app to improve your P2P speeds."
+                        : "Only use it with apps you trust: the port is open to the internet.")
         }
     }
 }
@@ -1585,11 +1615,7 @@ struct InstallCLI: View {
             HStack {
                 Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).pointingHand().tip("Copy")
+                CopyButton(value: command)
             }
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
@@ -1899,13 +1925,6 @@ struct Panel: View {
         .onAppear {
             // Start in the search field each time, rather than wherever macOS puts focus.
             searchFocused = true
-            // SwiftUI makes the menu bar window resizable, which shows a resize cursor along its
-            // edges, though it sizes itself to fit.
-            DispatchQueue.main.async {
-                for window in NSApp.windows where window.isKeyWindow {
-                    window.styleMask.remove(.resizable)
-                }
-            }
             Task {
                 await vpn.refresh()
                 // The network may have changed since.
@@ -2172,7 +2191,6 @@ struct Panel: View {
             HStack(spacing: 5) {
                 Text("DNS").foregroundStyle(.secondary)
                 Text(current).fontWeight(.medium).foregroundStyle(.primary)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
             }
             .font(.callout)
         }
@@ -2181,19 +2199,18 @@ struct Panel: View {
         .buttonStyle(.plain).pointingHand()
         .menuIndicator(.hidden)
         .fixedSize()
-        .disabled(vpn.busy != nil)
+        .tip("Change DNS")
     }
 
     @ViewBuilder var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Always three lines, so the panel keeps its height: a title, the IP and DNS, then the
-            // server's load or where you are, and the speeds.
+            // A title, the IP and DNS, then the server's load and speeds while connected.
             // Only the title shows what's in progress, so the rest stays put, e.g. while changing a setting.
             let connected = vpn.status.state == "Connected"
             if let busy = vpn.busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(busyTitle(busy)).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                    Text(busyTitle(busy)).font(.title3.weight(.semibold)).lineLimit(1)
                 }
                 .padding(.trailing, 50)
                 .titleLine()
@@ -2202,11 +2219,9 @@ struct Panel: View {
                 case "Connected":
                     HStack(spacing: 6) {
                         Text(flag(vpn.status.code ?? ""))
-                        Text(vpn.status.country ?? "").fontWeight(.semibold)
-                        Text(vpn.status.server ?? "").foregroundStyle(.secondary)
-                        if let load = vpn.status.load {
-                            LoadBar(load: load).tip("Server load: \(load)%")
-                        }
+                        // The server's name gives way first, when it and a long country don't fit.
+                        Text(vpn.status.country ?? "").fontWeight(.semibold).lineLimit(1).layoutPriority(1)
+                        Text(vpn.status.server ?? "").foregroundStyle(.secondary).lineLimit(1)
                     }
                     .font(.title3)
                     .padding(.trailing, 50)
@@ -2228,33 +2243,50 @@ struct Panel: View {
             }
             HStack(spacing: 4) {
                 // The real IP until the tunnel's takes over.
-                detail("IP", connected ? vpn.status.ip : vpn.publicIP).textSelection(.enabled)
-                Spacer()
-                if connected {
+                detail("IP", connected ? vpn.status.ip : vpn.publicIP).tip("Your IP address")
+                Spacer(minLength: 0)
+                if connected, let port = vpn.status.port {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(String(port), forType: .string)
+                    } label: { detail("Port", String(port)) }
+                        .buttonStyle(.plain).pointingHand()
+                        .tip("Your forwarded port: click to copy")
+                    Spacer(minLength: 0)
+                }
+                if connected, vpn.busy == nil {
                     dnsMenu
+                } else if connected {
+                    // Not a menu while something's in progress, without fading like a disabled one.
+                    detail("DNS", dnsChoices.first { $0.0 == vpn.settings.dns }?.1 ?? "Custom")
                 } else {
                     detail("DNS", vpn.systemDNS)
-                        .tip("Your network's DNS. Proton's is used once you're connected.")
+                        .tip("Your network's DNS")
                 }
             }
             .infoLine()
-            HStack(spacing: 4) {
-                if connected, let port = vpn.status.port {
-                    detail("Port", String(port)).textSelection(.enabled)
-                } else if !connected, let code = vpn.publicCode {
-                    // Where sites think you are, from your real IP.
-                    detail("Location", "\(flag(code)) \(Locale.current.localizedString(forRegionCode: code) ?? code)")
+            // Only while connected; disconnected, the panel's that line shorter.
+            if connected {
+                HStack(spacing: 4) {
+                    if let load = vpn.status.load {
+                        HStack(spacing: 5) {
+                            Text("Load").foregroundStyle(.secondary)
+                            LoadBar(load: load)
+                            Text("\(load)%").fontWeight(.medium).monospacedDigit()
+                        }
+                        .fixedSize()
+                    }
+                    Spacer(minLength: 8)
+                    if let speeds = vpn.speeds {
+                        detail("↓", rate(speeds.down))
+                        detail("↑", rate(speeds.up)).padding(.leading, 6)
+                    }
                 }
-                Spacer()
-                if connected, let speeds = vpn.speeds {
-                    detail("↓", rate(speeds.down))
-                    detail("↑", rate(speeds.up)).padding(.leading, 6)
-                }
+                .font(.callout)
+                .infoLine()
             }
-            .font(.callout)
-            .infoLine()
             if let message = vpn.message {
-                Text(message).foregroundStyle(.red).font(.caption).lineLimit(3)
+                Text(message).foregroundStyle(.red).font(.caption).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2295,8 +2327,10 @@ struct Panel: View {
                     .buttonStyle(.plain).pointingHand()
                     .tip("Quit")
             }
-            .font(.system(size: 13))
+            .font(.system(size: 14))
             .foregroundStyle(.secondary)
+            // Centered on the title line.
+            .frame(height: 24)
         }
         .padding(.horizontal, 4)
     }
@@ -2313,7 +2347,7 @@ struct Panel: View {
     /// A label and its value, or nothing until the value's known.
     @ViewBuilder func detail(_ label: String, _ value: String?) -> some View {
         if let value {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary)
                 Text(value).fontWeight(.medium).monospacedDigit()
             }
