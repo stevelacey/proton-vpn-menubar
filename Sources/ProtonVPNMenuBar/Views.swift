@@ -578,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Shown when the `vpn` command isn't installed.
+/// Shown when the `protonvpn` command isn't installed.
 struct InstallCLI: View {
     let command = "brew install stevelacey/tap/proton-vpn-cli"
 

@@ -27,7 +27,7 @@ extension VPN {
 }
 
 extension AppEnvironment {
-    /// The real `vpn`, Proton's folders in your home, and the system's network, login items and
+    /// The real `protonvpn`, Proton's folders in your home, and the system's network, login items and
     /// administrator prompt.
     static let live: AppEnvironment = {
         let home = FileManager.default.homeDirectoryForCurrentUser

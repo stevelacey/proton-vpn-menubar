@@ -1,9 +1,9 @@
-// Proton VPN in the menu bar: status, quick actions and a country search, all through the `vpn` CLI.
+// Proton VPN in the menu bar: status, quick actions and a country search, all through the `protonvpn` CLI.
 import AppKit
 
 /// What the app reads, runs and asks the system for; tests swap in their own.
 struct AppEnvironment {
-    /// The `vpn` command from proton-vpn-cli-macos.
+    /// The `protonvpn` command from proton-vpn-cli-macos.
     var vpnPath: String
     /// Where Proton's CLI keeps the connection, and its settings.
     var connectionDirectory: String
@@ -17,10 +17,10 @@ struct AppEnvironment {
 
     var cliInstalled: Bool { FileManager.default.isExecutableFile(atPath: vpnPath) }
 
-    /// The `vpn` command wherever Homebrew, uv or pipx put it.
+    /// The `protonvpn` command wherever Homebrew, uv or pipx put it.
     static func findVPN(home: String, configured: String?, isExecutable: (String) -> Bool) -> String {
-        let candidates = [configured, "/opt/homebrew/bin/vpn", "/usr/local/bin/vpn", "\(home)/.local/bin/vpn"].compactMap { $0 }
-        return candidates.first(where: isExecutable) ?? "/opt/homebrew/bin/vpn"
+        let candidates = [configured, "/opt/homebrew/bin/protonvpn", "/usr/local/bin/protonvpn", "\(home)/.local/bin/protonvpn"].compactMap { $0 }
+        return candidates.first(where: isExecutable) ?? "/opt/homebrew/bin/protonvpn"
     }
 }
 
@@ -31,7 +31,7 @@ protocol LoginItem {
     func unregister() throws
 }
 
-/// DNS choices, as `vpn dns` names and labels.
+/// DNS choices, as `protonvpn dns` names and labels.
 let dnsChoices: [(String, String)] = [
     ("proton", "Proton"), ("cloudflare", "Cloudflare"), ("google", "Google"),
     ("opendns", "OpenDNS"), ("quad9", "Quad9"),
@@ -129,7 +129,7 @@ struct City: Decodable, Identifiable {
     var id: String { city }
 }
 
-/// Runs `vpn` with the given arguments, returning its exit status and output.
+/// Runs `protonvpn` with the given arguments, returning its exit status and output.
 func runVPN(_ vpnPath: String, _ arguments: [String], started: (@Sendable (Process) -> Void)? = nil) async -> (Int32, String) {
     await withCheckedContinuation { continuation in
         DispatchQueue.global().async {

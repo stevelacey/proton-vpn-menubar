@@ -4,14 +4,14 @@ import Testing
 @testable import ProtonVPNMenuBar
 
 @Test func findsVPNWhereverItIsInstalled() {
-    let installed: Set = ["/custom/vpn", "/usr/local/bin/vpn", "/Users/me/.local/bin/vpn"]
+    let installed: Set = ["/custom/protonvpn", "/usr/local/bin/protonvpn", "/Users/me/.local/bin/protonvpn"]
     let find = { (configured: String?, have: Set<String>) in
         AppEnvironment.findVPN(home: "/Users/me", configured: configured, isExecutable: have.contains)
     }
-    #expect(find("/custom/vpn", installed) == "/custom/vpn")
-    #expect(find(nil, installed) == "/usr/local/bin/vpn")
-    #expect(find(nil, ["/Users/me/.local/bin/vpn"]) == "/Users/me/.local/bin/vpn")
-    #expect(find(nil, []) == "/opt/homebrew/bin/vpn")
+    #expect(find("/custom/protonvpn", installed) == "/custom/protonvpn")
+    #expect(find(nil, installed) == "/usr/local/bin/protonvpn")
+    #expect(find(nil, ["/Users/me/.local/bin/protonvpn"]) == "/Users/me/.local/bin/protonvpn")
+    #expect(find(nil, []) == "/opt/homebrew/bin/protonvpn")
 }
 
 @MainActor @Test func knowsWhetherTheCLIIsInstalled() {

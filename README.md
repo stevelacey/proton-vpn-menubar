@@ -19,7 +19,7 @@ what you need from the menu bar and nothing else: no windows, no dock icon.
 
 ## Better together
 
-- **[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos)**: `vpn` and `protonvpn` in your terminal
+- **[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos)**: `protonvpn` in your terminal
 - **[Alfred Proton VPN](https://github.com/stevelacey/alfred-proton-vpn)**: `vpn swiss` from Alfred
 
 They all drive the same connection: connect from one and the others keep up. Use them instead of

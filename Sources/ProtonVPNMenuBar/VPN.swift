@@ -165,7 +165,7 @@ final class VPN: ObservableObject {
         recentCodes = Array(([code] + recentCodes).prefix(recentsLimit))
     }
 
-    /// Runs `vpn` with these arguments, returning its exit status and output.
+    /// Runs `protonvpn` with these arguments, returning its exit status and output.
     func command(_ arguments: [String], started: (@Sendable (Process) -> Void)? = nil) async -> (Int32, String) {
         await runVPN(environment.vpnPath, arguments, started: started)
     }
@@ -336,7 +336,7 @@ final class VPN: ObservableObject {
         run("Connecting…", modeWords + ["random"])
     }
 
-    /// The `vpn` command under way, for cancelling a connect.
+    /// The `protonvpn` command under way, for cancelling a connect.
     private var running: Process?
     private var cancelled: String?
 
@@ -449,7 +449,7 @@ final class VPN: ObservableObject {
         quickConnect()
     }
 
-    /// Whether `vpn setup` still has to run, so connecting works without a password.
+    /// Whether `protonvpn setup` still has to run, so connecting works without a password.
     @Published var needsSetup = false
 
     func checkSetup() async {
@@ -457,7 +457,7 @@ final class VPN: ObservableObject {
         needsSetup = code != 0
     }
 
-    /// Runs `vpn setup` as root, with macOS asking for an administrator's password.
+    /// Runs `protonvpn setup` as root, with macOS asking for an administrator's password.
     func runSetup() {
         let command = "'\(environment.vpnPath)' setup --user \(NSUserName())"
         busy = "Setting up…"
@@ -486,7 +486,7 @@ final class VPN: ObservableObject {
         accountLoaded = true
     }
 
-    /// Signs in through `vpn signin --stdin`, which answers Proton's own prompts from what's typed here.
+    /// Signs in through `protonvpn signin --stdin`, which answers Proton's own prompts from what's typed here.
     func signIn(username: String, password: String) {
         guard signInProcess == nil else { return }
         signIn = .working
@@ -660,7 +660,7 @@ final class VPN: ObservableObject {
         if let code = status.code { await loadServers(code) }
     }
 
-    /// Same ranking as `vpn list`: code, name or alias, then prefixes, then substrings.
+    /// Same ranking as `protonvpn list`: code, name or alias, then prefixes, then substrings.
     func search(_ query: String) -> [Country] {
         let q = fold(query.trimmingCharacters(in: .whitespaces))
         guard !q.isEmpty else { return [] }
@@ -676,7 +676,7 @@ final class VPN: ObservableObject {
         return ranked.sorted { ($0.0, $0.1.name) < ($1.0, $1.1.name) }.map(\.1)
     }
 
-    /// Runs `vpn forward` while connected with port forwarding on, which renews the port
+    /// Runs `protonvpn forward` while connected with port forwarding on, which renews the port
     /// Proton's server only hands out for a minute at a time.
     private func keepPortForwarded() {
         let wanted = status.state == "Connected" && settings.portForwarding
