@@ -1265,9 +1265,26 @@ struct Tip: ViewModifier {
         window.hasShadow = true
         window.ignoresMouseEvents = true
         window.contentView = host
+        // Out of the way of a click, and of any menu it opens, such as DNS's.
+        NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.hide()
+            return event
+        }
+        NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                self.menuOpen = true
+                self.hide()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { self.menuOpen = false }
+        }
     }
 
+    private var menuOpen = false
+
     func show(_ text: String) {
+        guard !menuOpen else { return }
         host.rootView = AnyView(
             Text(text)
                 .font(.caption)
