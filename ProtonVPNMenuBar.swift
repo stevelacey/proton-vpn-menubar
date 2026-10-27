@@ -2227,7 +2227,7 @@ struct Panel: View {
                         Text(flag(vpn.status.code ?? ""))
                         // The server's name gives way first, when it and a long country don't fit.
                         Text(vpn.status.country ?? "").fontWeight(.semibold).lineLimit(1).layoutPriority(1)
-                        Text(vpn.status.server ?? "").foregroundStyle(.secondary).lineLimit(1)
+                        serverMenu
                     }
                     .font(.title3)
                     .padding(.trailing, 50)
@@ -2342,6 +2342,56 @@ struct Panel: View {
     }
 
     /// "IP: 1.2.3.4", as in Proton's app.
+    /// The server's name, as a menu to switch to a random server in the country or one of its
+    /// cities, for the current filters.
+    @ViewBuilder var serverMenu: some View {
+        let current = vpn.status.server ?? ""
+        let cities = vpn.status.code.flatMap { vpn.cities($0) } ?? []
+        let country = vpn.countries.first { $0.code == vpn.status.code }
+        let others = cities.flatMap(\.servers).filter { $0.name != current }
+        let label = Text(current).foregroundStyle(.secondary).lineLimit(1)
+        // Plain text when there's nothing to pick or something's in progress, not a faded menu.
+        if vpn.busy != nil || others.isEmpty {
+            label.task(id: serverListKey) { await loadCurrentServers() }
+        } else {
+        Menu {
+            if let country {
+                // The least loaded or a random other server in the country; a random one in your city,
+                // or the fastest in another.
+                Button("Fastest \(country.name)") { vpn.connect(server: others.min { $0.load < $1.load }!, in: country) }
+                Button("Random \(country.name)") { vpn.connect(server: others.randomElement()!, in: country) }
+                if cities.count > 1 {
+                    Divider()
+                    ForEach(cities) { city in
+                        let servers = city.servers.filter { $0.name != current }
+                        if city.servers.contains(where: { $0.name == current }) {
+                            if !servers.isEmpty {
+                                Button(city.city) { vpn.connect(server: servers.randomElement()!, in: country) }
+                            }
+                        } else {
+                            Button(city.city) { vpn.connect(city: city.city, in: country) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            label
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain).pointingHand()
+        .menuIndicator(.hidden)
+        .tip("Change server")
+        .task(id: serverListKey) { await loadCurrentServers() }
+        }
+    }
+
+    /// The connected country's servers, loaded again when the filters change.
+    var serverListKey: String { "\(vpn.status.code ?? "")\(vpn.filters.sorted())\(vpn.settings.portForwarding)\(vpn.secureCore)" }
+
+    func loadCurrentServers() async {
+        if let code = vpn.status.code { await vpn.loadServers(code) }
+    }
+
     /// What's in progress, saying where it's connecting to once Proton's picked a server, e.g. for
     /// Fastest or Random.
     func busyTitle(_ busy: String) -> String {
