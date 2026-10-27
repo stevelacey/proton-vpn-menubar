@@ -37,14 +37,14 @@ Proton's Mac app, not alongside it, since it runs its own VPN connection that th
 ## Install
 
 ```sh
+brew install stevelacey/tap/proton-vpn-cli
 brew install --cask stevelacey/tap/proton-vpn-menubar
 ```
 
-It installs [proton-vpn-cli-macos](https://github.com/stevelacey/proton-vpn-cli-macos) too, and asks once
-for your Mac's password to set it up, so connecting doesn't need it again.
+The app asks once for your Mac's password to set up the
+[CLI](https://github.com/stevelacey/proton-vpn-cli-macos), so connecting doesn't need it again.
 
-Or download the app from [releases](https://github.com/stevelacey/proton-vpn-menubar/releases), with
-`brew install stevelacey/tap/proton-vpn-cli` for the CLI.
+Or download the app from [releases](https://github.com/stevelacey/proton-vpn-menubar/releases).
 
 Requires macOS 14 or later.
 
