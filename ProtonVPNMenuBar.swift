@@ -1176,6 +1176,8 @@ struct FilterButton: View {
     let image: Image
     let tip: String
     let selected: Bool
+    /// On because another setting needs it, so it can't be turned off.
+    var locked = false
     let action: () -> Void
 
     var body: some View {
@@ -1186,7 +1188,7 @@ struct FilterButton: View {
                 .frame(width: 11, height: 11)
                 .padding(4)
                 .foregroundStyle(selected ? Color.white : Color.secondary)
-                .background(RoundedRectangle(cornerRadius: 5).fill(selected ? Color.accentColor : .clear))
+                .background(RoundedRectangle(cornerRadius: 5).fill(locked ? Color.primary.opacity(0.2) : selected ? Color.accentColor : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).pointingHand()
@@ -1990,8 +1992,8 @@ struct Panel: View {
                         // Port forwarding only works on P2P servers, so it keeps that filter on.
                         let forced = filter.feature == "p2p" && vpn.settings.portForwarding && !vpn.secureCore
                         FilterButton(feature: filter.feature, title: filter.title, image: filter.image,
-                                     tip: forced ? "P2P servers only, as port forwarding needs them" : filter.tip,
-                                     selected: forced || vpn.filters.contains(filter.feature)) {
+                                     tip: forced ? "P2P: required for port forwarding" : filter.tip,
+                                     selected: forced || vpn.filters.contains(filter.feature), locked: forced) {
                             guard !forced else { return }
                             if vpn.filters.contains(filter.feature) {
                                 vpn.filters.remove(filter.feature)
