@@ -8,6 +8,8 @@ struct AppEnvironment {
     /// Where Proton's CLI keeps the connection, and its settings.
     var connectionDirectory: String
     var settingsDirectory: String
+    /// Where `protonvpn forward`, which the CLI runs in the background, keeps the forwarded port.
+    var forwardedPortDirectory: String
     var defaults: UserDefaults
     var version: String
     var fetch: @Sendable (URLRequest) async throws -> (Data, URLResponse)

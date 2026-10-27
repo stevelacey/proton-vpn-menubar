@@ -12,7 +12,6 @@ final class VPN: ObservableObject {
         didSet {
             animate()
             if status != oldValue { message = nil }
-            keepPortForwarded()
             if status.state == "Connected", let code = status.code {
                 remember(code)
                 defaults.set(code, forKey: "lastCountry")
@@ -37,8 +36,7 @@ final class VPN: ObservableObject {
     @Published var recentCodes: [String] {
         didSet { defaults.set(recentCodes, forKey: "recents") }
     }
-    @Published var settings = Settings() { didSet { keepPortForwarded() } }
-    private var forwarder: Process?
+    @Published var settings = Settings()
     @Published var countries: [Country] = []
     @Published var busy: String? { didSet { animate() } }
     @Published var message: String?
@@ -82,6 +80,8 @@ final class VPN: ObservableObject {
         // reports it being created or removed (signing out removes it), to watch the new one.
         watch(environment.settingsDirectory)
         watchSettingsFile()
+        // The forwarded port, as soon as the CLI's forwarder gets one.
+        watch(environment.forwardedPortDirectory)
         registerLoginItemOnce()
         // A newer release, checked on launch and then daily.
         Task { await checkForUpdates() }
@@ -97,7 +97,7 @@ final class VPN: ObservableObject {
         }
     }
 
-    /// Refreshes whenever Proton's CLI, run from anywhere, saves or removes the connection or settings.
+    /// Refreshes whenever Proton's CLI, run from anywhere, saves or removes the connection, settings or port.
     private func watch(_ directory: String) {
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         let fd = open(directory, O_EVTONLY)
@@ -674,34 +674,6 @@ final class VPN: ObservableObject {
             return nil
         }
         return ranked.sorted { ($0.0, $0.1.name) < ($1.0, $1.1.name) }.map(\.1)
-    }
-
-    /// Runs `protonvpn forward` while connected with port forwarding on, which renews the port
-    /// Proton's server only hands out for a minute at a time.
-    private func keepPortForwarded() {
-        let wanted = status.state == "Connected" && settings.portForwarding
-        if wanted, forwarder?.isRunning != true {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: environment.vpnPath)
-            process.arguments = ["forward"]
-            // It says when it gets a new port, which shows it straight away rather than at the next poll.
-            let output = Pipe()
-            output.fileHandleForReading.readabilityHandler = { handle in
-                guard !handle.availableData.isEmpty else { handle.readabilityHandler = nil; return }
-                Task { @MainActor [weak self] in await self?.refresh(force: true) }
-            }
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { _ in
-                Task { @MainActor [weak self] in await self?.refresh(force: true) }
-            }
-            try? process.run()
-            forwarder = process
-        } else if !wanted, let process = forwarder {
-            process.terminationHandler = nil
-            if process.isRunning { process.terminate() }
-            forwarder = nil
-        }
     }
 
     var connecting: Bool { (busy?.hasPrefix("Connecting") ?? false) || status.state == "Connecting" }

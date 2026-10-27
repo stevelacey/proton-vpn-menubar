@@ -103,24 +103,17 @@ import Testing
         VPN(environment: environment).start()
     }
 
-    @Test func keepsTheForwardedPortWhileConnectedWithPortForwarding() async {
+    @Test func refreshesWhenTheForwardedPortChanges() async throws {
         let harness = Harness()
-        harness.fake.respond("forward", "Forwarded port 4242\n", after: 0.3)
         let vpn = harness.vpn
         let statusCalls = { harness.fake.calls.filter { $0 == "status --json" }.count }
-        vpn.settings.portForwarding = true
+        vpn.start()
+        await eventually { statusCalls() >= 1 }
+        let before = statusCalls()
+        try "4242".write(toFile: harness.fake.forwardedPort + "/forwarded_port", atomically: false, encoding: .utf8)
+        await eventually { statusCalls() > before }
+        // It doesn't run a forwarder of its own: the CLI does.
         #expect(!harness.fake.calls.contains("forward"))
-        vpn.status = Status(state: "Connected", server: "CH#1", code: "CH")
-        await eventually { harness.fake.calls.contains("forward") }
-        // It refreshes when it reports a port, and when it stops.
-        await eventually { statusCalls() >= 2 }
-        // Turning it off stops it, while it runs or not.
-        harness.fake.respond("forward", "", after: 5)
-        vpn.status = Status(state: "Connected", server: "CH#2", code: "CH")
-        await eventually { harness.fake.calls.filter { $0 == "forward" }.count == 2 }
-        vpn.settings.portForwarding = false
-        vpn.settings.portForwarding = true
-        vpn.status = Status(state: "Disconnected")
     }
 
     @Test func signsInWithTwoFactorCodes() async {

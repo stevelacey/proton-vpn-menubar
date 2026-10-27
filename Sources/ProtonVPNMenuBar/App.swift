@@ -36,6 +36,7 @@ extension AppEnvironment {
                              isExecutable: FileManager.default.isExecutableFile(atPath:)),
             connectionDirectory: home.appendingPathComponent(".cache/Proton/VPN/connection").path,
             settingsDirectory: home.appendingPathComponent(".config/Proton/VPN").path,
+            forwardedPortDirectory: FileManager.default.temporaryDirectory.appendingPathComponent("Proton/VPN").path,
             defaults: .standard,
             version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
             fetch: { try await URLSession.shared.data(for: $0) },

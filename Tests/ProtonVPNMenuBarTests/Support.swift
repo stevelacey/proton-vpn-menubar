@@ -9,6 +9,7 @@ final class FakeVPN: @unchecked Sendable {
     var path: String { directory.appendingPathComponent("vpn").path }
     var connection: String { directory.appendingPathComponent("connection").path }
     var settings: String { directory.appendingPathComponent("settings").path }
+    var forwardedPort: String { directory.appendingPathComponent("forwarded").path }
 
     init() {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("vpn-\(UUID().uuidString)")
@@ -117,6 +118,7 @@ struct Harness {
         let network = network
         vpn = VPN(environment: AppEnvironment(
             vpnPath: fake.path, connectionDirectory: fake.connection, settingsDirectory: fake.settings,
+            forwardedPortDirectory: fake.forwardedPort,
             defaults: defaults, version: version, fetch: { try await network.fetch($0) }, loginItem: loginItem,
             runAsAdministrator: { command in
                 admin.commands.append(command)
