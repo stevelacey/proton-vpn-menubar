@@ -993,7 +993,13 @@ final class VPN: ObservableObject {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: vpnPath)
             process.arguments = ["forward"]
-            process.standardOutput = FileHandle.nullDevice
+            // It says when it gets a new port, which shows it straight away rather than at the next poll.
+            let output = Pipe()
+            output.fileHandleForReading.readabilityHandler = { handle in
+                guard !handle.availableData.isEmpty else { handle.readabilityHandler = nil; return }
+                Task { @MainActor [weak self] in await self?.refresh(force: true) }
+            }
+            process.standardOutput = output
             process.standardError = FileHandle.nullDevice
             process.terminationHandler = { _ in
                 Task { @MainActor [weak self] in await self?.refresh(force: true) }
