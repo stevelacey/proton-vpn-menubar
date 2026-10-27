@@ -1,6 +1,7 @@
 // Proton VPN in the menu bar: status, quick actions and a country search, all through the `vpn` CLI.
 import AppKit
 import ServiceManagement
+import SystemConfiguration
 import SwiftUI
 
 /// The `vpn` command from proton-vpn-cli-macos, wherever Homebrew, uv or pipx put it.
@@ -48,6 +49,8 @@ struct Status: Decodable, Equatable {
     var city: String?
     var ip: String?
     var port: Int?
+    var interface: String?
+    var load: Int?
 }
 
 struct Settings: Decodable, Equatable {
@@ -362,8 +365,15 @@ final class VPN: ObservableObject {
             if busy == "Disconnecting…" && status.state == "Disconnected" { busy = nil }
         }
     }
-    /// The IP address sites see while disconnected.
+    /// The IP address sites see while disconnected, and its country, kept while connecting.
     @Published var publicIP: String?
+    @Published var publicCode: String?
+    /// The network's DNS servers, which are in use while disconnected.
+    @Published var systemDNS: String?
+    /// Bytes per second down and up through the tunnel.
+    @Published var speeds: (down: Double, up: Double)?
+    private var lastBytes: (interface: String, down: UInt32, up: UInt32, at: Date)?
+    private let store = SCDynamicStoreCreate(nil, "ProtonVPNMenuBar" as CFString, nil, nil)
     @Published var pinnedCodes = UserDefaults.standard.stringArray(forKey: "pinned") ?? [] {
         didSet { UserDefaults.standard.set(pinnedCodes, forKey: "pinned") }
     }
@@ -496,13 +506,50 @@ final class VPN: ObservableObject {
 
     /// Looks up the IP address that's exposed while disconnected, with Cloudflare's trace page.
     func loadPublicIP() async {
-        guard status.state == "Disconnected" else { publicIP = nil; return }
+        guard status.state == "Disconnected" else { return }
         var request = URLRequest(url: URL(string: "https://1.1.1.1/cdn-cgi/trace")!)
         request.timeoutInterval = 5
         guard let (data, _) = try? await URLSession.shared.data(for: request) else { return }
-        let ip = String(decoding: data, as: UTF8.self).split(separator: "\n")
-            .first { $0.hasPrefix("ip=") }?.dropFirst(3)
-        if status.state == "Disconnected", let ip { publicIP = String(ip) }
+        let fields = Dictionary(String(decoding: data, as: UTF8.self).split(separator: "\n").compactMap { line in
+            line.firstIndex(of: "=").map { (String(line[..<$0]), String(line[line.index(after: $0)...])) }
+        }, uniquingKeysWith: { a, _ in a })
+        if status.state == "Disconnected", let ip = fields["ip"] {
+            publicIP = ip
+            publicCode = fields["loc"]
+        }
+    }
+
+    /// Updates the speeds and the network's DNS, every second while the panel's open.
+    func sample() {
+        let store = store
+        let global = { (key: String) in SCDynamicStoreCopyValue(store, "State:/Network/Global/\(key)" as CFString) as? [String: Any] }
+        if status.state != "Connected" {
+            systemDNS = (global("DNS")?["ServerAddresses"] as? [String])?.first
+        }
+        guard status.state == "Connected", let interface = status.interface,
+              let bytes = interfaceBytes(interface) else { speeds = nil; lastBytes = nil; return }
+        let now = Date()
+        if let last = lastBytes, last.interface == interface {
+            let seconds = now.timeIntervalSince(last.at)
+            // The counters are 32-bit, so they wrap every 4 GB.
+            speeds = (Double(bytes.down &- last.down) / seconds, Double(bytes.up &- last.up) / seconds)
+        }
+        lastBytes = (interface, bytes.down, bytes.up, now)
+    }
+
+    private func interfaceBytes(_ name: String) -> (down: UInt32, up: UInt32)? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0 else { return nil }
+        defer { freeifaddrs(list) }
+        var entry = list
+        while let ifa = entry?.pointee {
+            if ifa.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), String(cString: ifa.ifa_name) == name,
+               let data = ifa.ifa_data?.assumingMemoryBound(to: if_data.self).pointee {
+                return (data.ifi_ibytes, data.ifi_obytes)
+            }
+            entry = ifa.ifa_next
+        }
+        return nil
     }
 
     func loadSettings() async {
@@ -562,11 +609,6 @@ final class VPN: ObservableObject {
 
     private var mode: String? { modeWords.isEmpty ? nil : modeWords.joined(separator: " ") }
 
-    private var modeLabel: String {
-        if secureCore { return " via Secure Core" }
-        let labels = modeWords.map { $0 == "tor" ? "Tor" : "P2P" }
-        return labels.isEmpty ? "" : " (\(labels.joined(separator: ", ")))"
-    }
 
     /// Server lists by mode and country, fetched as countries are expanded, until the panel closes.
     @Published private var serverLists: [String: [City]] = [:]
@@ -594,7 +636,7 @@ final class VPN: ObservableObject {
     func connect(city: String, in country: Country) {
         guard busy == nil else { return }
         connectingCode = country.code
-        run("Connecting to \(city)\(modeLabel)…", ["city"] + modeWords + [city])
+        run("Connecting to \(city)…", ["city"] + modeWords + [city])
     }
 
     func connect(server: Server, in country: Country) {
@@ -606,14 +648,14 @@ final class VPN: ObservableObject {
     func connect(_ country: Country) {
         guard busy == nil else { return }
         connectingCode = country.code
-        run("Connecting to \(country.name)\(modeLabel)…", modeWords + [country.code])
+        run("Connecting to \(country.name)…", modeWords + [country.code])
     }
     func fastest() {
-        run("Connecting to the fastest server\(modeLabel)…", modeWords + ["fastest"])
+        run("Connecting…", modeWords + ["fastest"])
     }
 
     func random() {
-        run("Connecting to a random server\(modeLabel)…", modeWords + ["random"])
+        run("Connecting…", modeWords + ["random"])
     }
 
     /// The `vpn` command under way, for cancelling a connect.
@@ -1012,10 +1054,10 @@ struct FeatureIcons: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            if features.contains("p2p") { Image(systemName: "arrow.left.arrow.right").help("P2P") }
-            if features.contains("tor") { Image(nsImage: resource("ic-brand-tor")).resizable().frame(width: 12, height: 12).help("Tor") }
-            if features.contains("streaming") { Image(systemName: "play").help("Streaming") }
-            if features.contains("smartrouting") { Image(systemName: "globe").help("Smart routing") }
+            if features.contains("p2p") { Image(systemName: "arrow.left.arrow.right").tip("P2P") }
+            if features.contains("tor") { Image(nsImage: resource("ic-brand-tor")).resizable().frame(width: 12, height: 12).tip("Tor") }
+            if features.contains("streaming") { Image(systemName: "play").tip("Streaming") }
+            if features.contains("smartrouting") { Image(systemName: "globe").tip("Smart routing") }
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
@@ -1061,7 +1103,7 @@ struct ExpandButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).pointingHand()
-        .help(expanded ? "Hide servers" : "Show servers")
+        .tip(expanded ? "Hide servers" : "Show servers")
     }
 }
 
@@ -1093,8 +1135,6 @@ struct ServerRow: View {
     let current: Bool
     let action: () -> Void
 
-    var loadColor: Color { server.load < 75 ? .green : server.load < 90 ? .yellow : .red }
-
     var body: some View {
         HoverButton(action: action) {
             HStack(spacing: 8) {
@@ -1107,10 +1147,7 @@ struct ServerRow: View {
                 }
                 Spacer()
                 FeatureIcons(features: server.features)
-                Capsule().fill(Color.primary.opacity(0.12)).frame(width: 28, height: 4)
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(loadColor).frame(width: 28 * CGFloat(min(server.load, 100)) / 100, height: 4)
-                    }
+                LoadBar(load: server.load)
                 Text("\(server.load)%").font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     .frame(width: 30, alignment: .trailing)
             }
@@ -1119,11 +1156,25 @@ struct ServerRow: View {
     }
 }
 
+/// A server's load, colored like Proton's: green, then yellow from 75%, red from 90%.
+struct LoadBar: View {
+    let load: Int
+
+    var body: some View {
+        Capsule().fill(Color.primary.opacity(0.12)).frame(width: 28, height: 4)
+            .overlay(alignment: .leading) {
+                Capsule().fill(load < 75 ? .green : load < 90 ? .yellow : .red)
+                    .frame(width: 28 * CGFloat(min(load, 100)) / 100, height: 4)
+            }
+    }
+}
+
 /// A feature filter beside the search field.
 struct FilterButton: View {
     let feature: String
     let title: String
     let image: Image
+    let tip: String
     let selected: Bool
     let action: () -> Void
 
@@ -1139,8 +1190,73 @@ struct FilterButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).pointingHand()
-        .help(selected ? "Showing \(title) countries only" : "Show \(title) countries only")
+        .tip(tip)
     }
+}
+
+extension View {
+    /// A tooltip: `help` doesn't show in a menu bar panel, as the app's never active.
+    func tip(_ text: String) -> some View { modifier(Tip(text: text)) }
+}
+
+struct Tip: ViewModifier {
+    let text: String
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                hovering = inside
+                TipWindow.shared.hide()
+                guard inside else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if hovering, !text.isEmpty { TipWindow.shared.show(text) }
+                }
+            }
+            .onDisappear {
+                if hovering { TipWindow.shared.hide() }
+            }
+    }
+}
+
+/// The tooltip itself, in a window of its own under the pointer, so nothing in the panel clips or
+/// covers it.
+@MainActor final class TipWindow {
+    static let shared = TipWindow()
+    private let window = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+    private let host = NSHostingView(rootView: AnyView(EmptyView()))
+
+    private init() {
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.ignoresMouseEvents = true
+        window.contentView = host
+    }
+
+    func show(_ text: String) {
+        host.rootView = AnyView(
+            Text(text)
+                .font(.caption)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .windowBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.15)))
+                .fixedSize()
+        )
+        let size = host.fittingSize
+        let mouse = NSEvent.mouseLocation
+        var origin = NSPoint(x: mouse.x, y: mouse.y - size.height - 20)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+            origin.x = min(origin.x, screen.visibleFrame.maxX - size.width - 4)
+        }
+        window.setFrame(NSRect(origin: origin, size: size), display: true)
+        window.orderFront(nil)
+    }
+
+    func hide() { window.orderOut(nil) }
 }
 
 /// A star that pins a country to the top of the list: always shown once pinned, otherwise on hover.
@@ -1161,7 +1277,7 @@ struct PinButton: View {
         .focused($focused)
         // Also shown when the keyboard focuses it, so pinning doesn't need a mouse.
         .opacity(pinned || visible || focused ? 1 : 0)
-        .help(pinned ? "Unpin" : "Pin to the top")
+        .tip(pinned ? "Unpin" : "Pin to the top")
     }
 }
 
@@ -1202,7 +1318,7 @@ struct ActiveCountryRow: View {
         }
         .buttonStyle(.plain).pointingHand()
         .onHover { hovering = $0 }
-        .help(state == "Connecting" ? "Cancel" : "Disconnect")
+        .tip(state == "Connecting" ? "Cancel" : "Disconnect")
         .background {
             if state == "Connecting" {
                 // Pulses while connecting.
@@ -1267,15 +1383,31 @@ struct NetShieldLevel {
     let level: Int
     let title: String
     let value: String
-    let symbol: String
 
     static let all = [
-        NetShieldLevel(level: 0, title: "Don't Block", value: "off", symbol: "shield"),
-        NetShieldLevel(level: 1, title: "Block Malware Only", value: "malware-only", symbol: "shield.lefthalf.filled"),
-        NetShieldLevel(level: 2, title: "Block Malware, Ads and Trackers", value: "malware-ads-trackers", symbol: "shield.fill"),
-        NetShieldLevel(level: 3, title: "Block Malware, Ads, Trackers and Adult Content", value: "malware-ads-trackers-adult",
-                       symbol: "checkmark.shield.fill"),
+        NetShieldLevel(level: 0, title: "Don't Block", value: "off"),
+        NetShieldLevel(level: 1, title: "Block Malware Only", value: "malware-only"),
+        NetShieldLevel(level: 2, title: "Block Malware, Ads and Trackers", value: "malware-ads-trackers"),
+        NetShieldLevel(level: 3, title: "Block Malware, Ads, Trackers and Adult Content", value: "malware-ads-trackers-adult"),
     ]
+}
+
+/// Each setting's icons, the same on its toggle and in its card.
+enum Icon {
+    static func secureCore(_ on: Bool) -> Image { Image(nsImage: resource(on ? "ic-lock-filled" : "ic-lock")) }
+    static func killSwitch(_ on: Bool) -> Image { Image(nsImage: resource(on ? "ic-killswitch-on" : "ic-killswitch")) }
+    static func portForwarding(_ on: Bool) -> Image {
+        Image(nsImage: resource(on ? "ic-arrows-switch" : "ic-arrow-up-bounce-left"))
+    }
+    /// Proton's shields, plus one with a check for adult content, which Proton's icons don't have.
+    static func netShield(_ level: Int) -> Image {
+        switch level {
+        case 1: Image(nsImage: resource("ic-shield-half-filled"))
+        case 2: Image(nsImage: resource("ic-shield-filled"))
+        case 3: Image(systemName: "checkmark.shield.fill")
+        default: Image(nsImage: resource("ic-shield"))
+        }
+    }
 }
 
 /// A feature's card, like the popovers in Proton's app: what it does, and its settings to pick from.
@@ -1302,7 +1434,7 @@ struct FeatureCard: View {
                     Button { vpn.card = nil } label: { Image(systemName: "xmark") }
                         .buttonStyle(.plain).pointingHand()
                         .foregroundStyle(.secondary)
-                        .help("Close")
+                        .tip("Close")
                 }
                 Text(content.text)
                     .font(.callout)
@@ -1332,15 +1464,15 @@ struct FeatureCard: View {
         case .secureCore:
             return ("Secure Core",
                     "Routes your connection through a second server in Switzerland, Iceland or Sweden first, so even a compromised server can't see where you're from.",
-                    [Option(title: "Secure Core Off", image: Image(systemName: "lock.open"), selected: !vpn.secureCore) { vpn.setSecureCore(false) },
-                     Option(title: "Secure Core On", image: Image(nsImage: resource("ic-lock")), selected: vpn.secureCore) { vpn.setSecureCore(true) }],
+                    [Option(title: "Secure Core Off", image: Icon.secureCore(false), selected: !vpn.secureCore) { vpn.setSecureCore(false) },
+                     Option(title: "Secure Core On", image: Icon.secureCore(true), selected: vpn.secureCore) { vpn.setSecureCore(true) }],
                     "Secure Core may reduce your speed.")
         case .netShield:
             let usable = vpn.settings.dns == "proton"
             return ("NetShield",
                     "Blocks malware, and if you like ads, trackers and adult content, by filtering Proton's DNS.",
                     NetShieldLevel.all.map { level in
-                        Option(title: level.title, image: Image(systemName: level.symbol),
+                        Option(title: level.title, image: Icon.netShield(level.level),
                                selected: (usable ? vpn.settings.netshield : 0) == level.level,
                                enabled: usable || level.level == 0) { vpn.setNetShield(level.level) }
                     },
@@ -1350,15 +1482,15 @@ struct FeatureCard: View {
             let on = vpn.settings.killSwitch > 0
             return ("Kill Switch",
                     "If the VPN connection drops, the kill switch blocks your internet until it's back, so your real IP address can't leak. Your local network keeps working.",
-                    [Option(title: "Kill Switch Off", image: Image(nsImage: resource("ic-killswitch")), selected: !on) { vpn.setKillSwitch(false) },
-                     Option(title: "Kill Switch On", image: Image(nsImage: resource("ic-killswitch-on")), selected: on) { vpn.setKillSwitch(true) }],
+                    [Option(title: "Kill Switch Off", image: Icon.killSwitch(false), selected: !on) { vpn.setKillSwitch(false) },
+                     Option(title: "Kill Switch On", image: Icon.killSwitch(true), selected: on) { vpn.setKillSwitch(true) }],
                     "Your IP address may be visible for a moment while switching servers.")
         case .portForwarding:
             let on = vpn.settings.portForwarding
             return ("Port Forwarding",
                     "Lets incoming connections reach you through the VPN, for torrenting, games and hosting. It only works on P2P servers, so you'll connect to one.",
-                    [Option(title: "Port Forwarding Off", image: Image(systemName: "arrow.right.to.line"), selected: !on) { vpn.setPortForwarding(false) },
-                     Option(title: "Port Forwarding On", image: Image(systemName: "arrow.right.to.line.compact"), selected: on) { vpn.setPortForwarding(true) }],
+                    [Option(title: "Port Forwarding Off", image: Icon.portForwarding(false), selected: !on) { vpn.setPortForwarding(false) },
+                     Option(title: "Port Forwarding On", image: Icon.portForwarding(true), selected: on) { vpn.setPortForwarding(true) }],
                     vpn.status.port.map { "Forwarded port: \($0)" } ?? "Only use it with apps you trust: the port is open to the internet.")
         }
     }
@@ -1384,11 +1516,17 @@ struct OptionRow: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
+                if option.selected {
+                    Image(systemName: "checkmark").fontWeight(.semibold)
+                }
             }
-            .foregroundStyle(option.selected ? Color.accentColor : option.enabled ? Color.primary : Color.secondary.opacity(0.6))
+            .foregroundStyle(option.enabled ? Color.primary : Color.secondary.opacity(0.6))
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(hovering && option.enabled ? 0.1 : 0.05)))
+            // The chosen one is tinted, keeping its text readable.
+            .background(RoundedRectangle(cornerRadius: 8).fill(option.selected
+                ? Color.accentColor.opacity(0.25)
+                : Color.primary.opacity(hovering && option.enabled ? 0.1 : 0.05)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(option.selected ? Color.accentColor : Color.primary.opacity(0.1)))
             .contentShape(Rectangle())
         }
@@ -1430,7 +1568,7 @@ struct InstallCLI: View {
                 Text("Install the CLI").font(.title3.weight(.semibold))
                 Spacer()
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
-                    .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).help("Quit")
+                    .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
             }
             Text("This app runs on the Proton VPN CLI, forked for macOS. Install it with Homebrew:")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1441,7 +1579,7 @@ struct InstallCLI: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(command, forType: .string)
                 } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).pointingHand().help("Copy")
+                    .buttonStyle(.plain).pointingHand().tip("Copy")
             }
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
@@ -1464,7 +1602,7 @@ struct SignInForm: View {
             HStack {
                 Spacer()
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
-                    .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).help("Quit")
+                    .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
             }
             .padding(.bottom, -14)
             VStack(spacing: 6) {
@@ -1697,15 +1835,19 @@ struct Panel: View {
     @State private var listHeight: CGFloat = 0
 
     var body: some View {
-        if !cliInstalled {
-            InstallCLI()
-        } else if !vpn.accountLoaded {
-            ProgressView().controlSize(.small).frame(width: 320, height: 80)
-        } else if vpn.account == nil {
-            SignInForm(vpn: vpn)
-        } else {
-            panel
+        Group {
+            if !cliInstalled {
+                InstallCLI()
+            } else if !vpn.accountLoaded {
+                ProgressView().controlSize(.small).frame(width: 320, height: 80)
+            } else if vpn.account == nil {
+                SignInForm(vpn: vpn)
+            } else {
+                panel
+            }
         }
+        // Mostly opaque: the menu bar's glass makes it hard to read over a bright window.
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.9).ignoresSafeArea())
     }
 
     var panel: some View {
@@ -1747,10 +1889,23 @@ struct Panel: View {
         .onAppear {
             // Start in the search field each time, rather than wherever macOS puts focus.
             searchFocused = true
+            // SwiftUI makes the menu bar window resizable, which shows a resize cursor along its
+            // edges, though it sizes itself to fit.
+            DispatchQueue.main.async {
+                for window in NSApp.windows where window.isKeyWindow {
+                    window.styleMask.remove(.resizable)
+                }
+            }
             Task {
                 await vpn.refresh()
                 // The network may have changed since.
                 await vpn.loadPublicIP()
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                vpn.sample()
+                try? await Task.sleep(for: .seconds(1))
             }
         }
         .onDisappear {
@@ -1778,20 +1933,19 @@ struct Panel: View {
             }
 
             HStack(spacing: 8) {
-                Toggle(title: "Secure Core", image: Image(nsImage: resource("ic-lock")), on: vpn.secureCore) {
+                Toggle(title: "Secure Core", image: Icon.secureCore(vpn.secureCore), on: vpn.secureCore) {
                     vpn.card = .secureCore
                 }
                 // NetShield filters Proton's DNS, so it does nothing with another provider's.
-                let netShieldOn = vpn.settings.netshield > 0 && vpn.settings.dns == "proton"
-                Toggle(title: "NetShield", image: Image(nsImage: resource(netShieldOn ? "ic-shield-filled" : "ic-shield")),
-                       on: netShieldOn) {
+                let netShield = vpn.settings.dns == "proton" ? vpn.settings.netshield : 0
+                Toggle(title: "NetShield", image: Icon.netShield(netShield), on: netShield > 0) {
                     vpn.card = .netShield
                 }
-                Toggle(title: "Kill Switch", image: Image(nsImage: resource(vpn.settings.killSwitch > 0 ? "ic-killswitch-on" : "ic-killswitch")),
+                Toggle(title: "Kill Switch", image: Icon.killSwitch(vpn.settings.killSwitch > 0),
                        on: vpn.settings.killSwitch > 0) {
                     vpn.card = .killSwitch
                 }
-                Toggle(title: "Port Fwd", image: Image(systemName: "arrow.right.to.line"), on: vpn.settings.portForwarding) {
+                Toggle(title: "Port Fwd", image: Icon.portForwarding(vpn.settings.portForwarding), on: vpn.settings.portForwarding) {
                     vpn.card = .portForwarding
                 }
             }
@@ -1833,8 +1987,12 @@ struct Panel: View {
                 }
                 HStack(spacing: 0) {
                     ForEach(filters, id: \.feature) { filter in
+                        // Port forwarding only works on P2P servers, so it keeps that filter on.
+                        let forced = filter.feature == "p2p" && vpn.settings.portForwarding && !vpn.secureCore
                         FilterButton(feature: filter.feature, title: filter.title, image: filter.image,
-                                     selected: vpn.filters.contains(filter.feature)) {
+                                     tip: forced ? "P2P servers only, as port forwarding needs them" : filter.tip,
+                                     selected: forced || vpn.filters.contains(filter.feature)) {
+                            guard !forced else { return }
                             if vpn.filters.contains(filter.feature) {
                                 vpn.filters.remove(filter.feature)
                             } else {
@@ -1977,11 +2135,11 @@ struct Panel: View {
         return count > 0 && count < listed.count ? count : nil
     }
 
-    var filters: [(feature: String, title: String, image: Image)] {
+    var filters: [(feature: String, title: String, image: Image, tip: String)] {
         [
-            ("p2p", "P2P", Image(systemName: "arrow.left.arrow.right")),
-            ("tor", "Tor", Image(nsImage: resource("ic-brand-tor"))),
-            ("streaming", "streaming", Image(systemName: "play")),
+            ("p2p", "P2P", Image(systemName: "arrow.left.arrow.right"), "P2P: servers for file sharing"),
+            ("tor", "Tor", Image(nsImage: resource("ic-brand-tor")), "Tor: servers that route through Tor"),
+            ("streaming", "streaming", Image(systemName: "play"), "Streaming: servers for streaming services"),
         ]
     }
 
@@ -2001,12 +2159,12 @@ struct Panel: View {
                 }
             }
         } label: {
-            HStack(spacing: 2) {
-                Text("DNS: \(current)")
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            HStack(spacing: 5) {
+                Text("DNS").foregroundStyle(.secondary)
+                Text(current).fontWeight(.medium).foregroundStyle(.primary)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
             }
             .font(.callout)
-            .foregroundStyle(.secondary)
         }
         // A plain button style, so the label keeps the IP's size and color.
         .menuStyle(.button)
@@ -2018,15 +2176,17 @@ struct Panel: View {
 
     @ViewBuilder var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Always two lines (a title, then the IP or server), so the panel keeps its height.
+            // Always three lines, so the panel keeps its height: a title, the IP and DNS, then the
+            // server's load or where you are, and the speeds.
+            // Only the title shows what's in progress, so the rest stays put, e.g. while changing a setting.
+            let connected = vpn.status.state == "Connected"
             if let busy = vpn.busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(busy).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                    Text(busyTitle(busy)).font(.title3.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                 }
                 .padding(.trailing, 50)
                 .titleLine()
-                ipLabel(vpn.status.state == "Connected" ? vpn.status.ip : vpn.publicIP).infoLine()
             } else {
                 switch vpn.status.state {
                 case "Connected":
@@ -2034,41 +2194,55 @@ struct Panel: View {
                         Text(flag(vpn.status.code ?? ""))
                         Text(vpn.status.country ?? "").fontWeight(.semibold)
                         Text(vpn.status.server ?? "").foregroundStyle(.secondary)
+                        if let load = vpn.status.load {
+                            LoadBar(load: load).tip("Server load: \(load)%")
+                        }
                     }
                     .font(.title3)
                     .padding(.trailing, 50)
                     .titleLine()
-                    .help(vpn.status.city ?? "")
-                    HStack(spacing: 4) {
-                        ipLabel(vpn.status.ip)
-                        Spacer()
-                        dnsMenu
-                    }
-                    .infoLine()
-                    if let port = vpn.status.port {
-                        HStack(spacing: 4) {
-                            Text("Forwarded port:").foregroundStyle(.secondary)
-                            Text(String(port)).fontWeight(.semibold).textSelection(.enabled)
-                        }
-                        .font(.callout)
-                    }
+                    .tip(vpn.status.city ?? "")
                 case "Connecting":
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text("Connecting…").font(.title3.weight(.semibold))
+                        Text("Connecting to \(vpn.status.country ?? vpn.status.server ?? "Proton")…").font(.title3.weight(.semibold))
                     }
                     .padding(.trailing, 50)
                     .titleLine()
-                    Text(vpn.status.server ?? "").font(.callout).foregroundStyle(.secondary).infoLine()
                 case "Dropped":
                     Text("Connection Dropped").font(.title3.weight(.semibold)).foregroundStyle(.orange).titleLine()
-                    Text("\(vpn.status.server ?? "The server") stopped responding").font(.callout).foregroundStyle(.secondary).infoLine()
+                        .tip("\(vpn.status.server ?? "The server") stopped responding")
                 default:
                     Text("Not Connected").font(.title3.weight(.semibold)).foregroundStyle(notConnected).titleLine()
-                    // DNS only applies to the tunnel, so there's nothing to pick while disconnected.
-                    ipLabel(vpn.publicIP).infoLine()
                 }
             }
+            HStack(spacing: 4) {
+                // The real IP until the tunnel's takes over.
+                detail("IP", connected ? vpn.status.ip : vpn.publicIP).textSelection(.enabled)
+                Spacer()
+                if connected {
+                    dnsMenu
+                } else {
+                    detail("DNS", vpn.systemDNS)
+                        .tip("Your network's DNS. Proton's is used once you're connected.")
+                }
+            }
+            .infoLine()
+            HStack(spacing: 4) {
+                if connected, let port = vpn.status.port {
+                    detail("Port", String(port)).textSelection(.enabled)
+                } else if !connected, let code = vpn.publicCode {
+                    // Where sites think you are, from your real IP.
+                    detail("Location", "\(flag(code)) \(Locale.current.localizedString(forRegionCode: code) ?? code)")
+                }
+                Spacer()
+                if connected, let speeds = vpn.speeds {
+                    detail("↓", rate(speeds.down))
+                    detail("↑", rate(speeds.up)).padding(.leading, 6)
+                }
+            }
+            .font(.callout)
+            .infoLine()
             if let message = vpn.message {
                 Text(message).foregroundStyle(.red).font(.caption).lineLimit(3)
             }
@@ -2106,10 +2280,10 @@ struct Panel: View {
                 .buttonStyle(.plain).pointingHand()
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Settings")
+                .tip("Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand()
-                    .help("Quit")
+                    .tip("Quit")
             }
             .font(.system(size: 13))
             .foregroundStyle(.secondary)
@@ -2118,12 +2292,32 @@ struct Panel: View {
     }
 
     /// "IP: 1.2.3.4", as in Proton's app.
-    func ipLabel(_ ip: String?) -> some View {
-        HStack(spacing: 4) {
-            Text("IP:").foregroundStyle(.secondary)
-            Text(ip ?? "…").fontWeight(.semibold).textSelection(.enabled)
+    /// What's in progress, saying where it's connecting to once Proton's picked a server, e.g. for
+    /// Fastest or Random.
+    func busyTitle(_ busy: String) -> String {
+        guard busy.hasPrefix("Connecting") || busy.hasPrefix("Reconnecting"), vpn.status.state == "Connecting",
+              let country = vpn.status.country else { return busy }
+        return "Connecting to \(country)…"
+    }
+
+    /// A label and its value, or nothing until the value's known.
+    @ViewBuilder func detail(_ label: String, _ value: String?) -> some View {
+        if let value {
+            HStack(spacing: 5) {
+                Text(label).foregroundStyle(.secondary)
+                Text(value).fontWeight(.medium).monospacedDigit()
+            }
+            .font(.callout)
+            .fixedSize()
         }
-        .font(.callout)
+    }
+
+    func rate(_ bytesPerSecond: Double) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .decimal
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: Int64(bytesPerSecond)) + "/s"
     }
 }
 
