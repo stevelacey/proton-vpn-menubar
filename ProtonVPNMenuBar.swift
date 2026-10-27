@@ -1049,15 +1049,23 @@ struct HoverButton<Label: View>: View {
     }
 }
 
+/// What each server feature is for, in Proton's words, for tooltips.
+let featureTips = [
+    "p2p": "P2P: best for BitTorrent and file sharing",
+    "tor": "Tor over VPN: through the Tor network, slower but more private",
+    "streaming": "Streaming: Netflix, Disney+ and more from anywhere",
+    "smartrouting": "Smart Routing: faster and safer in hard-to-serve countries",
+]
+
 struct FeatureIcons: View {
     let features: [String]
 
     var body: some View {
         HStack(spacing: 5) {
-            if features.contains("p2p") { Image(systemName: "arrow.left.arrow.right").tip("P2P") }
-            if features.contains("tor") { Image(nsImage: resource("ic-brand-tor")).resizable().frame(width: 12, height: 12).tip("Tor") }
-            if features.contains("streaming") { Image(systemName: "play").tip("Streaming") }
-            if features.contains("smartrouting") { Image(systemName: "globe").tip("Smart routing") }
+            if features.contains("p2p") { Image(systemName: "arrow.left.arrow.right").tip(featureTips["p2p"]!) }
+            if features.contains("tor") { Image(nsImage: resource("ic-brand-tor")).resizable().frame(width: 12, height: 12).tip(featureTips["tor"]!) }
+            if features.contains("streaming") { Image(systemName: "play").tip(featureTips["streaming"]!) }
+            if features.contains("smartrouting") { Image(systemName: "globe").tip(featureTips["smartrouting"]!) }
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
@@ -2139,9 +2147,9 @@ struct Panel: View {
 
     var filters: [(feature: String, title: String, image: Image, tip: String)] {
         [
-            ("p2p", "P2P", Image(systemName: "arrow.left.arrow.right"), "P2P: servers for file sharing"),
-            ("tor", "Tor", Image(nsImage: resource("ic-brand-tor")), "Tor: servers that route through Tor"),
-            ("streaming", "streaming", Image(systemName: "play"), "Streaming: servers for streaming services"),
+            ("p2p", "P2P", Image(systemName: "arrow.left.arrow.right"), featureTips["p2p"]!),
+            ("tor", "Tor", Image(nsImage: resource("ic-brand-tor")), featureTips["tor"]!),
+            ("streaming", "streaming", Image(systemName: "play"), featureTips["streaming"]!),
         ]
     }
 
