@@ -125,6 +125,8 @@ import Testing
         vpn.signIn(username: "again", password: "x")
         await eventually { vpn.signIn == .code(invalid: false) }
         vpn.submit(code: "000000")
+        // Still on the code, checking it, rather than back to the form.
+        #expect(vpn.signIn == .checkingCode)
         await eventually { vpn.signIn == .code(invalid: true) }
         vpn.submit(code: "123456")
         await eventually { vpn.account?.username == "me" }

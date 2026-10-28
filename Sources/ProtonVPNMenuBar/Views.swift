@@ -985,7 +985,8 @@ struct SignInForm: View {
                 if case .code(invalid: true) = vpn.signIn {
                     errorText("That code didn't work. Try again.")
                 }
-                primaryButton("Continue", disabled: code.isEmpty, action: submitCode)
+                primaryButton(vpn.signIn == .checkingCode ? "Checking…" : "Continue",
+                              disabled: code.isEmpty || vpn.signIn == .checkingCode, action: submitCode)
                 Button("Cancel") { vpn.cancelSignIn() }
                     .buttonStyle(.plain).pointingHand()
                     .font(.caption)
@@ -1065,7 +1066,7 @@ struct SignInForm: View {
 
     var isCode: Bool {
         if case .code = vpn.signIn { return true }
-        return false
+        return vpn.signIn == .checkingCode
     }
 
     func field(_ label: String, @ViewBuilder input: () -> some View) -> some View {
@@ -1095,7 +1096,7 @@ struct SignInForm: View {
     func primaryButton(_ title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if vpn.signIn == .working { ProgressView().controlSize(.small).tint(.white) }
+                if vpn.signIn == .working || vpn.signIn == .checkingCode { ProgressView().controlSize(.small).tint(.white) }
                 Text(title).fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)

@@ -104,6 +104,8 @@ enum SignIn: Equatable {
     case form
     case working
     case code(invalid: Bool)
+    /// A code's been sent, and it's waiting to hear whether it worked.
+    case checkingCode
 }
 
 struct Country: Decodable, Identifiable, Equatable {

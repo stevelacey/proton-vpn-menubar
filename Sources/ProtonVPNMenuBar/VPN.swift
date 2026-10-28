@@ -539,6 +539,7 @@ final class VPN: ObservableObject {
     @Published var signInError: String?
     private var signInProcess: Process?
     private var signInInput: FileHandle?
+    private var signedIn = false
 
     func loadAccount() async {
         let (code, output) = await command(["account", "--json"])
@@ -554,6 +555,7 @@ final class VPN: ObservableObject {
         guard signInProcess == nil else { return }
         signIn = .working
         signInError = nil
+        signedIn = false
         let process = Process()
         process.executableURL = URL(fileURLWithPath: environment.vpnPath)
         process.arguments = ["signin", "--stdin"]
@@ -574,7 +576,8 @@ final class VPN: ObservableObject {
                 guard let self else { return }
                 self.signInProcess = nil
                 self.signInInput = nil
-                if self.signIn != .form { self.signIn = .form }
+                // Signed in, it stays put until the account's loaded, rather than flashing the form.
+                if !self.signedIn, self.signIn != .form { self.signIn = .form }
             }
         }
         do {
@@ -590,7 +593,7 @@ final class VPN: ObservableObject {
     }
 
     func submit(code: String) {
-        signIn = .working
+        signIn = .checkingCode
         signInInput?.write(Data("\(code)\n".utf8))
     }
 
@@ -603,9 +606,10 @@ final class VPN: ObservableObject {
         if line == "2fa" || line == "2fa invalid" {
             signIn = .code(invalid: line == "2fa invalid")
         } else if line.hasPrefix("ok ") {
-            signIn = .form
+            signedIn = true
             Task {
                 await loadAccount()
+                signIn = .form
                 await refresh(force: true)
                 await loadCountries()
             }
