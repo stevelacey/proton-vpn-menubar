@@ -30,6 +30,18 @@ import Testing
         #expect(!defaults.bool(forKey: "autoConnect") && defaults.bool(forKey: "showFlag"))
     }
 
+    @Test func quittingDoesWhatYouSaidNotToAskAgainAbout() {
+        let harness = Harness { $0.set(true, forKey: "disconnectOnQuit") }
+        let vpn = harness.vpn
+        #expect(vpn.askToQuit() == .quit)
+        vpn.status = Status(state: "Connected", server: "CH#1", code: "CH")
+        #expect(vpn.askToQuit() == .disconnectAndQuit)
+        vpn.disconnectOnQuit = false
+        #expect(vpn.askToQuit() == .quit && harness.defaults.object(forKey: "disconnectOnQuit") as? Bool == false)
+        vpn.disconnectOnQuit = nil
+        #expect(harness.defaults.object(forKey: "disconnectOnQuit") == nil)
+    }
+
     @Test func defaultsWithoutPreferences() {
         let vpn = Harness().vpn
         #expect(vpn.pinnedCodes == [] && vpn.recentCodes == defaultRecents && !vpn.secureCore && vpn.filters == [])

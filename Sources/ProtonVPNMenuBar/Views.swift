@@ -1201,6 +1201,7 @@ extension VPN {
     /// disconnect before quitting.
     func askToQuit() -> QuitChoice {
         guard status.state != "Disconnected" else { return .quit }
+        if let disconnectOnQuit { return disconnectOnQuit ? .disconnectAndQuit : .quit }
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Quit Proton VPN Menu Bar?"
@@ -1208,9 +1209,17 @@ extension VPN {
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Disconnect and Quit")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: return .quit
-        case .alertSecondButtonReturn: return .disconnectAndQuit
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't ask again"
+        let response = alert.runModal()
+        let remember = alert.suppressionButton?.state == .on
+        switch response {
+        case .alertFirstButtonReturn:
+            if remember { disconnectOnQuit = false }
+            return .quit
+        case .alertSecondButtonReturn:
+            if remember { disconnectOnQuit = true }
+            return .disconnectAndQuit
         default: return .cancel
         }
     }

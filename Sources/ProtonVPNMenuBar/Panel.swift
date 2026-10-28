@@ -595,6 +595,9 @@ struct Panel: View {
                     }
                     SwiftUI.Toggle("Open at Login", isOn: Binding(get: { vpn.openAtLogin }, set: { vpn.setOpenAtLogin($0) }))
                     SwiftUI.Toggle("Reconnect on Launch", isOn: $vpn.autoConnect)
+                    // Off asks again when you quit.
+                    SwiftUI.Toggle("Disconnect on Quit", isOn: Binding(get: { vpn.disconnectOnQuit == true },
+                                                                        set: { vpn.disconnectOnQuit = $0 ? true : nil }))
                     SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
                     Button("Keyboard Shortcuts…") {
                         vpn.card = .shortcut

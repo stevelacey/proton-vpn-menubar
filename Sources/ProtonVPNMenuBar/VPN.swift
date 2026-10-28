@@ -62,6 +62,7 @@ final class VPN: ObservableObject {
         secureCore = defaults.bool(forKey: "secureCore")
         filters = Set(defaults.stringArray(forKey: "filters") ?? [])
         autoConnect = defaults.bool(forKey: "autoConnect")
+        disconnectOnQuit = defaults.object(forKey: "disconnectOnQuit") as? Bool
         showFlag = defaults.object(forKey: "showFlag") as? Bool ?? true
         shortcut = defaults.data(forKey: "shortcut").flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
         quickShortcut = defaults.data(forKey: "quickShortcut").flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
@@ -458,6 +459,11 @@ final class VPN: ObservableObject {
     /// Connects again to the last country on launch, when disconnected.
     @Published var autoConnect: Bool {
         didSet { defaults.set(autoConnect, forKey: "autoConnect") }
+    }
+
+    /// Whether quitting disconnects, once you've said not to ask again; nil asks each time.
+    @Published var disconnectOnQuit: Bool? {
+        didSet { defaults.set(disconnectOnQuit, forKey: "disconnectOnQuit") }
     }
 
     /// The shortcut that opens and closes the panel from any app, if you've set one.
