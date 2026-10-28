@@ -998,7 +998,7 @@ struct SignInForm: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Link("Create a free account", destination: URL(string: "https://account.protonvpn.com/signup")!)
+            Link("Create a free account", destination: URL(string: "https://account.proton.me/refer-a-friend?plan=vpn2024&referrer=RN5KW5DZ")!)
                 .font(.caption)
         }
         .padding(20)
