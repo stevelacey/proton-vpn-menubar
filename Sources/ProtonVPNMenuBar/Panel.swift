@@ -591,7 +591,7 @@ struct Panel: View {
                         Divider()
                     }
                     if let account = vpn.account {
-                        Text("\(account.username) (\(account.plan))")
+                        Text("\(account.username) (\(account.plan ?? "Free"))")
                         if account.free {
                             // Proton Free connects to the server Proton picks.
                             Link("Upgrade Your Proton Plan…", destination: URL(string: "https://protonvpn.com/pricing")!)

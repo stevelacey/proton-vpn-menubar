@@ -26,6 +26,9 @@ import Testing
     #expect(Account(username: "me", plan: "Free", tier: 0).free)
     #expect(!Account(username: "me", plan: "Plus", tier: 2).free)
     #expect(!Account(username: "me", plan: "Plus", tier: nil).free)
+    // Older CLIs give Proton Free no plan name.
+    let free = try? JSONDecoder().decode(Account.self, from: Data(#"{"username": "me", "plan": null, "tier": 0}"#.utf8))
+    #expect(free?.free == true && free?.plan == nil)
 }
 
 @Test func countriesHaveServersWithFeaturesTogether() {

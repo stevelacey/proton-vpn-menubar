@@ -74,7 +74,8 @@ struct Settings: Decodable, Equatable {
 
 struct Account: Decodable, Equatable {
     var username: String
-    var plan: String
+    /// Missing on Proton Free from versions of the CLI that don't name it.
+    var plan: String?
     var tier: Int?
 
     /// Proton Free, which connects to the fastest free server only.
