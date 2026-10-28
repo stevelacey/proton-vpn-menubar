@@ -8,9 +8,6 @@ struct HeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-/// How many of a city's servers to show at a time, least loaded first.
-let serverPage = 8
-
 /// Proton's pinkish red for "Not Connected".
 let notConnected = Color(red: 0.91, green: 0.42, blue: 0.47)
 

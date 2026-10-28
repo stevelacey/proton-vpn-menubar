@@ -11,7 +11,6 @@ struct Panel: View {
     @State private var selection: Int?
     @State private var expanded: String?
     @State private var expandedCity: String?
-    @State private var serverLimit = serverPage
     @State private var listHeight: CGFloat = 0
     @State private var titleHovered = false
 
@@ -197,7 +196,8 @@ struct Panel: View {
             }
             // Scrolls once it's taller than the screen allows, and otherwise fits its rows exactly.
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
+                // Lazy, so a country with hundreds of servers only builds the rows in sight.
+                LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(list.enumerated()), id: \.element.id) { index, c in
                         if index == restStart {
                             Divider().padding(.vertical, 4)
@@ -220,7 +220,6 @@ struct Panel: View {
     @ViewBuilder func row(_ c: Country) -> some View {
         let toggle = {
             expandedCity = nil
-            serverLimit = serverPage
             expanded = expanded == c.code ? nil : c.code
             if expanded != nil { Task { await vpn.loadServers(c.code) } }
         }
@@ -251,7 +250,6 @@ struct Panel: View {
                 ForEach(cities) { city in
                     CityRow(city: city, state: vpn.isActive(code: c.code, city: city.city) ? vpn.activeState : nil,
                             expanded: expandedCity == city.city, toggleExpanded: {
-                        serverLimit = serverPage
                         expandedCity = expandedCity == city.city ? nil : city.city
                     }) {
                         vpn.connect(city: city.city, in: c, picked: true)
@@ -267,20 +265,11 @@ struct Panel: View {
     }
 
     @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
-        let servers = city.servers
-        ForEach(servers.prefix(serverLimit)) { server in
+        ForEach(city.servers) { server in
             ServerRow(server: server, country: c.code,
                       state: vpn.isActive(code: c.code, server: server.name) ? vpn.activeState : nil) {
                 vpn.connect(server: server, in: c, picked: true)
             }
-        }
-        if servers.count > serverLimit {
-            Button("Show more (\(servers.count - serverLimit))") { serverLimit += serverPage }
-                .buttonStyle(.plain).pointingHand()
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 24)
-                .padding(.vertical, 4)
         }
     }
 
