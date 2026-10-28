@@ -109,7 +109,9 @@ struct CityRow: View {
                 Text(city.city)
                 if let state { StateDot(state: state) }
                 Spacer()
-                Text("\(city.servers.count)").font(.caption).foregroundStyle(.secondary)
+                // What its servers offer between them, e.g. which cities have P2P.
+                FeatureIcons(features: Array(Set(city.servers.flatMap(\.features))))
+                LoadBar(load: city.servers.map(\.load).reduce(0, +) / max(city.servers.count, 1))
                 ExpandButton(expanded: expanded, action: toggleExpanded)
             }
         }
