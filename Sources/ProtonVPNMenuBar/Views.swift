@@ -450,7 +450,7 @@ struct ActiveCountryRow: View {
             Button(action: disconnect) {
                 HStack(spacing: 8) {
                     Text(flag(country.code)).accessibilityHidden(true)
-                    Text(country.name).fontWeight(.semibold)
+                    Text(country.name)
                     Spacer()
                     FeatureIcons(features: country.features)
                 }
