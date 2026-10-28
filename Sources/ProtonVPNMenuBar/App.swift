@@ -22,6 +22,8 @@ extension VPN {
         let vpn = VPN(environment: .live)
         vpn.onAlert = vpn.showAlert
         vpn.onUpdateAvailable = vpn.offerUpdate
+        vpn.onShortcutChange = { VPN.shared.registerShortcuts() }
+        vpn.registerShortcuts()
         vpn.start()
         return vpn
     }()

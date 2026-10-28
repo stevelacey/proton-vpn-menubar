@@ -63,6 +63,8 @@ final class VPN: ObservableObject {
         filters = Set(defaults.stringArray(forKey: "filters") ?? [])
         autoConnect = defaults.bool(forKey: "autoConnect")
         showFlag = defaults.object(forKey: "showFlag") as? Bool ?? true
+        shortcut = defaults.data(forKey: "shortcut").flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
+        quickShortcut = defaults.data(forKey: "quickShortcut").flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
         openAtLogin = environment.loginItem.enabled
     }
 
@@ -385,7 +387,7 @@ final class VPN: ObservableObject {
         return available(countries).first { $0.code == code }
     }
 
-    enum Feature { case secureCore, netShield, killSwitch, portForwarding }
+    enum Feature { case secureCore, netShield, killSwitch, portForwarding, shortcut }
 
     /// The feature whose card is open in the panel, to choose its setting.
     @Published var card: Feature?
@@ -396,6 +398,15 @@ final class VPN: ObservableObject {
 
     func quickConnect() {
         if let country = quickConnectCountry { connect(country) } else { fastest() }
+    }
+
+    /// What the big button does: Quick Connect, Cancel while connecting, or Disconnect.
+    func quickConnectOrDisconnect() {
+        switch activeState {
+        case "Disconnected": if busy == nil { quickConnect() }
+        case "Connecting": disconnect()
+        default: if busy == nil { disconnect() }
+        }
     }
     func signOut() {
         guard busy == nil else { return }
@@ -448,6 +459,25 @@ final class VPN: ObservableObject {
     @Published var autoConnect: Bool {
         didSet { defaults.set(autoConnect, forKey: "autoConnect") }
     }
+
+    /// The shortcut that opens and closes the panel from any app, if you've set one.
+    @Published var shortcut: Shortcut? {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(shortcut), forKey: "shortcut")
+            onShortcutChange()
+        }
+    }
+
+    /// The shortcut that quick connects, or disconnects, from any app, if you've set one.
+    @Published var quickShortcut: Shortcut? {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(quickShortcut), forKey: "quickShortcut")
+            onShortcutChange()
+        }
+    }
+
+    /// Registers the shortcuts with macOS; the app's, and nothing in tests.
+    var onShortcutChange: () -> Void = {}
 
     @Published var showFlag: Bool {
         didSet { defaults.set(showFlag, forKey: "showFlag") }

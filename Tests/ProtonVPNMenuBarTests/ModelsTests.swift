@@ -93,3 +93,32 @@ final class Mutex<Value>: @unchecked Sendable {
     var value: Value { lock.withLock { stored } }
     func set(_ value: Value) { lock.withLock { stored = value } }
 }
+
+@Test func shortcutsNeedAModifierAndShowLikeMacOS() {
+    #expect(Shortcut(keyCode: 9, modifiers: [], characters: "v") == nil)
+    #expect(Shortcut(keyCode: 9, modifiers: .shift, characters: "V") == nil)
+    #expect(Shortcut(keyCode: 9, modifiers: .command, characters: "") == nil)
+    let shortcut = Shortcut(keyCode: 9, modifiers: [.command, .option, .capsLock], characters: "v")!
+    #expect(shortcut.description == "⌥⌘V")
+    #expect(shortcut.carbonModifiers == 256 | 2048)
+    let all = Shortcut(keyCode: 49, modifiers: [.control, .option, .shift, .command], characters: " ")!
+    #expect(all.description == "⌃⌥⇧⌘Space")
+    #expect(all.carbonModifiers == 256 | 512 | 2048 | 4096)
+}
+
+@MainActor @Test func theShortcutIsKeptAndRegistered() {
+    let harness = Harness()
+    var registered = 0
+    harness.vpn.onShortcutChange = { registered += 1 }
+    let shortcut = Shortcut(keyCode: 9, modifiers: .command, characters: "v")
+    let quick = Shortcut(keyCode: 2, modifiers: .option, characters: "d")
+    harness.vpn.shortcut = shortcut
+    harness.vpn.quickShortcut = quick
+    #expect(registered == 2)
+    let reloaded = VPN(environment: harness.vpn.environment)
+    #expect(reloaded.shortcut == shortcut && reloaded.quickShortcut == quick)
+    harness.vpn.shortcut = nil
+    #expect(VPN(environment: harness.vpn.environment).shortcut == nil)
+    // The default does nothing.
+    reloaded.onShortcutChange()
+}

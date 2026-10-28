@@ -209,6 +209,35 @@ import Testing
         #expect(vpn.serverChoices == nil)
     }
 
+    @Test func theQuickConnectShortcutDoesWhatTheBigButtonDoes() async {
+        let harness = Harness()
+        harness.fake.respond("fastest", "", after: 5)
+        let vpn = harness.vpn
+        let calls = { harness.fake.calls.filter { !$0.contains("--json") } }
+        // Disconnected: quick connects, here to the fastest; while connecting: cancels.
+        vpn.quickConnectOrDisconnect()
+        // Started, so there's something to cancel.
+        await eventually { calls() == ["fastest"] }
+        try? await Task.sleep(for: .milliseconds(200))
+        vpn.status = Status(state: "Connecting", server: "CH#1", code: "CH")
+        vpn.quickConnectOrDisconnect()
+        await eventually { calls() == ["fastest", "off"] }
+        await eventually { vpn.busy == nil }
+        // Connected: disconnects, unless something's in progress.
+        vpn.status = Status(state: "Connected", server: "CH#1", code: "CH")
+        vpn.busy = "Turning NetShield off…"
+        vpn.quickConnectOrDisconnect()
+        vpn.busy = nil
+        vpn.quickConnectOrDisconnect()
+        await eventually { calls() == ["fastest", "off", "off"] }
+        await eventually { vpn.busy == nil }
+        // Disconnected but busy: waits.
+        vpn.status = Status(state: "Disconnected")
+        vpn.busy = "Signing out…"
+        vpn.quickConnectOrDisconnect()
+        #expect(calls() == ["fastest", "off", "off"])
+    }
+
     @Test func quickConnectGoesToTheLastCountryOrTheFastest() async {
         let harness = Harness()
         let vpn = harness.vpn

@@ -209,3 +209,37 @@ func rate(_ bytesPerSecond: Double) -> String {
     formatter.allowsNonnumericFormatting = false
     return formatter.string(fromByteCount: Int64(bytesPerSecond)) + "/s"
 }
+
+/// A keyboard shortcut that works from any app: the key, its modifiers, and how to show it.
+struct Shortcut: Codable, Equatable {
+    var keyCode: UInt16
+    /// NSEvent's device-independent modifier flags.
+    var modifiers: UInt
+    /// The key's name, e.g. "V" or "Space".
+    var key: String
+
+    /// Nil without ⌘, ⌥ or ⌃, since a key on its own (or with just ⇧) would get in the way of typing.
+    init?(keyCode: UInt16, modifiers: NSEvent.ModifierFlags, characters: String?) {
+        let flags = modifiers.intersection([.command, .option, .control, .shift])
+        guard !flags.intersection([.command, .option, .control]).isEmpty else { return nil }
+        let names: [UInt16: String] = [49: "Space", 36: "↩", 48: "⇥", 51: "⌫", 123: "←", 124: "→", 125: "↓", 126: "↑"]
+        guard let key = names[keyCode] ?? characters?.uppercased(), !key.isEmpty else { return nil }
+        self.keyCode = keyCode
+        self.modifiers = flags.rawValue
+        self.key = key
+    }
+
+    var flags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: modifiers) }
+
+    /// In the usual order, e.g. ⌃⌥⌘V.
+    var description: String {
+        [(NSEvent.ModifierFlags.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
+            .filter { flags.contains($0.0) }.map(\.1).joined() + key
+    }
+
+    /// The modifiers as Carbon's hot key API wants them.
+    var carbonModifiers: UInt32 {
+        [(NSEvent.ModifierFlags.command, 256), (.shift, 512), (.option, 2048), (.control, 4096)]
+            .filter { flags.contains($0.0) }.map(\.1).reduce(0, |)
+    }
+}

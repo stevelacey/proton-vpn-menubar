@@ -551,6 +551,9 @@ struct Panel: View {
                     SwiftUI.Toggle("Open at Login", isOn: Binding(get: { vpn.openAtLogin }, set: { vpn.setOpenAtLogin($0) }))
                     SwiftUI.Toggle("Reconnect on Launch", isOn: $vpn.autoConnect)
                     SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
+                    Button("Keyboard Shortcuts…") {
+                        vpn.card = .shortcut
+                    }
                     Divider()
                     Button("Check for Updates…") { Task { await vpn.checkForUpdates(manual: true) } }
                     Button("About Proton VPN Menu Bar") { showAbout() }

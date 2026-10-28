@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 import SystemConfiguration
 import SwiftUI
@@ -587,6 +588,10 @@ struct FeatureCard: View {
                             .focused($focused, equals: index)
                     }
                 }
+                if feature == .shortcut {
+                    ShortcutRecorder(vpn: vpn, title: "Open the panel", shortcut: $vpn.shortcut)
+                    ShortcutRecorder(vpn: vpn, title: "Quick Connect or Disconnect", shortcut: $vpn.quickShortcut)
+                }
                 if feature == .portForwarding, let port = vpn.status.port {
                     // Like Proton's: the port in a box of its own, ready to copy.
                     VStack(alignment: .leading, spacing: 4) {
@@ -658,7 +663,113 @@ struct FeatureCard: View {
                      Option(title: "Port Forwarding On", image: Icon.portForwarding(true), selected: on) { vpn.setPortForwarding(true) }],
                     vpn.status.port != nil ? "Enter the active port number into your BitTorrent app to improve your P2P speeds."
                         : "Only use it with apps you trust: the port is open to the internet.")
+        case .shortcut:
+            return ("Keyboard Shortcuts",
+                    "These work from any app.",
+                    [],
+                    "Use ⌘, ⌥ or ⌃ with a key, so it doesn't get in the way of typing.")
         }
+    }
+}
+
+/// Records a shortcut: click, then press it; Esc cancels.
+struct ShortcutRecorder: View {
+    @ObservedObject var vpn: VPN
+    let title: String
+    @Binding var shortcut: Shortcut?
+    @State private var monitor: Any?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
+            HStack(spacing: 8) {
+                Button {
+                    monitor == nil ? record() : stop()
+                } label: {
+                    Text(monitor != nil ? "Press a shortcut…" : shortcut?.description ?? "Record Shortcut")
+                        .font(.body.weight(.medium)).monospacedDigit()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(monitor != nil ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.1)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(monitor != nil ? Color.accentColor : Color.primary.opacity(0.1)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).pointingHand()
+                .accessibilityLabel("\(title): \(shortcut?.description ?? "none")")
+                .accessibilityHint("Records a new shortcut")
+                if shortcut != nil, monitor == nil {
+                    Button("Clear") { shortcut = nil }
+                        .buttonStyle(.plain).pointingHand()
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Clear \(title.lowercased()) shortcut")
+                }
+            }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    func record() {
+        // The current ones would otherwise do their thing when pressed to be recorded.
+        HotKey.shared.register([])
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 {
+                stop()
+            } else if let recorded = Shortcut(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                               characters: event.charactersIgnoringModifiers) {
+                stop()
+                shortcut = recorded
+            }
+            return nil
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        vpn.registerShortcuts()
+    }
+}
+
+/// Shortcuts that work from any app, registered with macOS through Carbon, which needs no accessibility access.
+@MainActor final class HotKey {
+    static let shared = HotKey()
+    private var hotKeys: [EventHotKeyRef] = []
+    private var actions: [UInt32: () -> Void] = [:]
+    private var handler: EventHandlerRef?
+
+    /// Registers these in place of any before.
+    func register(_ shortcuts: [(Shortcut, () -> Void)]) {
+        hotKeys.forEach { UnregisterEventHotKey($0) }
+        hotKeys = []
+        actions = [:]
+        if handler == nil {
+            var pressed = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+                var id = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &id)
+                DispatchQueue.main.async { MainActor.assumeIsolated { HotKey.shared.actions[id.id]?() } }
+                return noErr
+            }, 1, &pressed, nil, &handler)
+        }
+        for (index, (shortcut, action)) in shortcuts.enumerated() {
+            let id = UInt32(index + 1)
+            var hotKey: EventHotKeyRef?
+            RegisterEventHotKey(UInt32(shortcut.keyCode), shortcut.carbonModifiers, EventHotKeyID(signature: 0x5056_4E4D, id: id),
+                                GetApplicationEventTarget(), 0, &hotKey)
+            if let hotKey {
+                hotKeys.append(hotKey)
+                actions[id] = action
+            }
+        }
+    }
+}
+
+extension VPN {
+    /// Registers the shortcuts you've set: the panel's and Quick Connect's.
+    func registerShortcuts() {
+        HotKey.shared.register([shortcut.map { ($0, togglePanel) }, quickShortcut.map { ($0, quickConnectOrDisconnect) }]
+            .compactMap { $0 })
     }
 }
 
