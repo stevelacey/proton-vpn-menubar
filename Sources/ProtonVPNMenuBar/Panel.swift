@@ -95,8 +95,13 @@ struct Panel: View {
                 showHints = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
                 return event
             }
-            // Start in the search field each time, rather than wherever macOS puts focus.
-            searchFocused = true
+            // Start in the search field each time, rather than wherever macOS puts focus. Proton Free
+            // has no search, so nothing starts focused.
+            if vpn.account?.free == true {
+                DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
+            } else {
+                searchFocused = true
+            }
             Task {
                 await vpn.refresh()
                 // The network may have changed since.
