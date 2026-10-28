@@ -967,7 +967,7 @@ struct SignInForm: View {
                 field("Email or username") {
                     TextField("", text: $username).textContentType(.username)
                 }
-                field("Password", link: ("Forgot password?", "https://account.proton.me/reset-password")) {
+                field("Password") {
                     SecureField("", text: $password).textContentType(.password).onSubmit(submit)
                 }
                 if let error = vpn.signInError {
@@ -976,6 +976,18 @@ struct SignInForm: View {
                 primaryButton(vpn.signIn == .working ? "Signing in…" : "Sign in",
                               disabled: username.isEmpty || password.isEmpty || vpn.signIn == .working,
                               action: submit)
+                // After the button, so tabbing goes from the password to signing in.
+                Menu("Need help?") {
+                    Link("Reset Password", destination: URL(string: "https://account.proton.me/reset-password")!)
+                    Link("Forgot Username", destination: URL(string: "https://account.proton.me/forgot-username")!)
+                    Link("Common Sign-In Issues", destination: URL(string: "https://protonvpn.com/support/login-problems")!)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain).pointingHand()
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(Color.accentColor)
+                .font(.callout)
             }
 
             Divider()
@@ -998,16 +1010,10 @@ struct SignInForm: View {
         return false
     }
 
-    func field(_ label: String, link: (String, String)? = nil, @ViewBuilder input: () -> some View) -> some View {
+    func field(_ label: String, @ViewBuilder input: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                Spacer()
-                if let link {
-                    Link(link.0, destination: URL(string: link.1)!).font(.caption)
-                }
-            }
+            Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             input()
                 // The fields have no placeholders, so the label above names them.
                 .accessibilityLabel(label)
