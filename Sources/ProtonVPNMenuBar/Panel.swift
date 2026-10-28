@@ -370,15 +370,12 @@ struct Panel: View {
             }
             HStack(spacing: 4) {
                 // The real IP until the tunnel's takes over.
-                detail("IP", connected ? vpn.status.ip : vpn.publicIP).tip("Your IP address")
+                if let ip = connected ? vpn.status.ip : vpn.publicIP {
+                    CopyDetail(label: "IP", value: ip).tip("Your IP address")
+                }
                 Spacer(minLength: 0)
                 if connected, let port = vpn.status.port {
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(String(port), forType: .string)
-                    } label: { detail("Port", String(port)) }
-                        .buttonStyle(.plain).pointingHand()
-                        .tip("Your forwarded port: click to copy")
+                    CopyDetail(label: "Port", value: String(port)).tip("Your forwarded port")
                     Spacer(minLength: 0)
                 }
                 if connected, vpn.busy == nil {

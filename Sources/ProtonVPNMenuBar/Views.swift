@@ -169,6 +169,46 @@ struct CopyButton: View {
     }
 }
 
+/// A value in the header, such as the IP or the forwarded port: click to copy it, with a copy icon
+/// on hover or focus, then a tick.
+struct CopyDetail: View {
+    let label: String
+    let value: String
+    @State private var hovering = false
+    @State private var copied = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(value, forType: .string)
+            copied = true
+            AccessibilityNotification.Announcement("Copied").post()
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(label).foregroundStyle(.secondary)
+                Text(value).fontWeight(.medium).monospacedDigit()
+                // Always there, so nothing moves when it shows.
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .opacity(hovering || focused || copied ? 1 : 0)
+            }
+            .font(.callout)
+            .fixedSize()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).pointingHand()
+        .focused($focused)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("\(label) \(value)")
+        .accessibilityHint("Copies it")
+    }
+}
+
 /// A feature filter beside the search field.
 struct FilterButton: View {
     let feature: String
