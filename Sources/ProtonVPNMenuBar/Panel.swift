@@ -13,6 +13,7 @@ struct Panel: View {
     @State private var expandedCity: String?
     @State private var serverLimit = serverPage
     @State private var listHeight: CGFloat = 0
+    @State private var titleHovered = false
 
     var body: some View {
         Group {
@@ -349,8 +350,12 @@ struct Panel: View {
                         // The server's name gives way first, when it and a long country don't fit.
                         Text(vpn.status.country ?? "").fontWeight(.semibold).lineLimit(1).layoutPriority(1)
                         serverMenu
+                        if let choices = vpn.serverChoices {
+                            ServerShortcuts(vpn: vpn, choices: choices, hovered: titleHovered)
+                        }
                     }
                     .font(.title3)
+                    .onHover { titleHovered = $0 }
                     .padding(.trailing, 50)
                     .titleLine()
                     .tip(vpn.status.city ?? "")

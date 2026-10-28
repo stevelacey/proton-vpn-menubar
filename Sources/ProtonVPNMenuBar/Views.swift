@@ -209,6 +209,37 @@ struct CopyDetail: View {
     }
 }
 
+/// Another server in the same country, fastest or random, beside the server's name on hover or
+/// focus, without opening its menu.
+struct ServerShortcuts: View {
+    @ObservedObject var vpn: VPN
+    let choices: VPN.ServerChoices
+    let hovered: Bool
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            shortcut("bolt.fill", "Fastest \(choices.country.name)") { vpn.connectFastest(choices) }
+            shortcut("shuffle", "Random \(choices.country.name)") { vpn.connectRandom(choices) }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize()
+        // No room taken until they show, when the server's name gives way; still there to tab to.
+        .frame(width: hovered || focused ? nil : 0, alignment: .leading)
+        .clipped()
+        .opacity(hovered || focused ? 1 : 0)
+    }
+
+    func shortcut(_ symbol: String, _ tip: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(.plain).pointingHand()
+            .focused($focused)
+            .tip(tip)
+            .accessibilityLabel(tip)
+    }
+}
+
 /// A feature filter beside the search field.
 struct FilterButton: View {
     let feature: String
