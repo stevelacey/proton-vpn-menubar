@@ -950,6 +950,7 @@ struct SignInForm: View {
     @ObservedObject var vpn: VPN
     @State private var username = ""
     @State private var password = ""
+    @State private var showPassword = false
     @State private var code = ""
 
     var body: some View {
@@ -994,7 +995,25 @@ struct SignInForm: View {
                     TextField("", text: $username).textContentType(.username)
                 }
                 field("Password") {
-                    SecureField("", text: $password).textContentType(.password).onSubmit(submit)
+                    HStack(spacing: 6) {
+                        Group {
+                            if showPassword {
+                                TextField("", text: $password)
+                            } else {
+                                SecureField("", text: $password)
+                            }
+                        }
+                        .textContentType(.password).onSubmit(submit)
+                        // Small and faint, and only once there's something to show.
+                        if !password.isEmpty {
+                            Button { showPassword.toggle() } label: { Image(systemName: showPassword ? "eye.slash" : "eye") }
+                                .buttonStyle(.plain).pointingHand()
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .tip(showPassword ? "Hide password" : "Show password")
+                                .accessibilityLabel(showPassword ? "Hide password" : "Show password")
+                        }
+                    }
                 }
                 if let error = vpn.signInError {
                     errorText(error)
