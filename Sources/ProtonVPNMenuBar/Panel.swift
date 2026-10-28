@@ -56,14 +56,6 @@ struct Panel: View {
 
             if vpn.account?.free == true {
                 QuickConnectButton(vpn: vpn).shortcutHint("↩")
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "info.circle").foregroundStyle(.secondary).accessibilityHidden(true)
-                    Text("On Proton Free, Proton picks the server. Plus adds countries, Secure Core, P2P and NetShield. ")
-                        .foregroundStyle(.secondary)
-                    + Text("[Upgrade](https://protonvpn.com/pricing)")
-                }
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
             } else {
                 paidControls
             }
@@ -595,6 +587,10 @@ struct Panel: View {
                     }
                     if let account = vpn.account {
                         Text("\(account.username) (\(account.plan))")
+                        if account.free {
+                            // Proton Free connects to the server Proton picks.
+                            Link("Upgrade Your Proton Plan…", destination: URL(string: "https://protonvpn.com/pricing")!)
+                        }
                         Divider()
                     }
                     SwiftUI.Toggle("Open at Login", isOn: Binding(get: { vpn.openAtLogin }, set: { vpn.setOpenAtLogin($0) }))
