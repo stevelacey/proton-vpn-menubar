@@ -981,7 +981,7 @@ struct SignInForm: View {
             Divider()
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "checkmark.shield").foregroundStyle(.secondary).accessibilityHidden(true)
-                Text("Signs in with the Proton VPN CLI for macOS, straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
+                Text("Your password is sent to Proton and never stored.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
