@@ -14,6 +14,9 @@ struct Panel: View {
     @State private var listHeight: CGFloat = 0
     @State private var titleHovered = false
     @State private var keyMonitor: Any?
+    @State private var flagsMonitor: Any?
+    /// Shows each button's shortcut while ⌘ is held.
+    @State private var showHints = false
 
     var body: some View {
         Group {
@@ -52,7 +55,7 @@ struct Panel: View {
             }
 
             if vpn.account?.free == true {
-                QuickConnectButton(vpn: vpn)
+                QuickConnectButton(vpn: vpn).shortcutHint("↩")
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "info.circle").foregroundStyle(.secondary).accessibilityHidden(true)
                     Text("On Proton Free, Proton picks the server. Plus adds countries, Secure Core, P2P and NetShield. ")
@@ -93,6 +96,11 @@ struct Panel: View {
                     vpn.card = nil
                     return nil
                 }
+                return command(event) ? nil : event
+            }
+            // Holding ⌘ on its own shows the shortcuts.
+            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                showHints = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
                 return event
             }
             // Start in the search field each time, rather than wherever macOS puts focus.
@@ -110,8 +118,10 @@ struct Panel: View {
             }
         }
         .onDisappear {
-            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            for monitor in [keyMonitor, flagsMonitor].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }
             keyMonitor = nil
+            flagsMonitor = nil
+            showHints = false
             vpn.card = nil
             query = ""
             selection = nil
@@ -122,35 +132,40 @@ struct Panel: View {
         .overlay {
             if let card = vpn.card { FeatureCard(vpn: vpn, feature: card) }
         }
+        .environment(\.shortcutHints, showHints && vpn.card == nil)
     }
 
     /// Everything a paid plan can choose: quick connects, features and countries.
     @ViewBuilder var paidControls: some View {
         // The buttons sit on one grid, with the same gap across and down.
         VStack(spacing: 8) {
-            QuickConnectButton(vpn: vpn)
+            QuickConnectButton(vpn: vpn).shortcutHint("↩")
 
             HStack(spacing: 8) {
-                ActionButton(title: "Fastest", symbol: "bolt.fill") { vpn.fastest() }
-                ActionButton(title: "Random", symbol: "shuffle") { vpn.random() }
+                ActionButton(title: "Fastest", symbol: "bolt.fill") { vpn.fastest() }.shortcutHint("F")
+                ActionButton(title: "Random", symbol: "shuffle") { vpn.random() }.shortcutHint("R")
             }
 
             HStack(spacing: 8) {
                 Toggle(title: "Secure Core", image: Icon.secureCore(vpn.secureCore), on: vpn.secureCore) {
                     vpn.card = .secureCore
                 }
+                .shortcutHint("S")
                 // NetShield filters Proton's DNS, so it does nothing with another provider's.
                 let netShield = vpn.settings.dns == "proton" ? vpn.settings.netshield : 0
                 Toggle(title: "NetShield", image: Icon.netShield(netShield), on: netShield > 0) {
                     vpn.card = .netShield
                 }
+                .shortcutHint("N")
                 Toggle(title: "Kill Switch", image: Icon.killSwitch(vpn.settings.killSwitch > 0),
                        on: vpn.settings.killSwitch > 0) {
                     vpn.card = .killSwitch
                 }
+                .shortcutHint("K")
                 Toggle(title: "Port Fwd", image: Icon.portForwarding(vpn.settings.portForwarding), on: vpn.settings.portForwarding) {
                     vpn.card = .portForwarding
                 }
+                .shortcutHint("P")
             }
             .disabled(vpn.busy != nil)
         }
@@ -158,6 +173,35 @@ struct Panel: View {
             Divider()
 
             countries
+    }
+
+    /// The panel's ⌘ shortcuts, the ones shown while ⌘ is held; true when it was one.
+    func command(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        if key == "q" {
+            NSApp.terminate(nil)
+            return true
+        }
+        guard vpn.card == nil, vpn.account != nil else { return false }
+        showHints = false
+        // ⌘Return presses the big button: Quick Connect, Cancel or Disconnect.
+        if event.keyCode == 36 || event.keyCode == 76 {
+            vpn.quickConnectOrDisconnect()
+            return true
+        }
+        // The rest are Plus features, and wait for whatever's in progress.
+        guard vpn.account?.free != true, vpn.busy == nil else { return ["f", "r", "s", "n", "k", "p"].contains(key) }
+        switch key {
+        case "f": vpn.fastest()
+        case "r": vpn.random()
+        case "s": vpn.setSecureCore(!vpn.secureCore)
+        case "n": vpn.card = .netShield
+        case "k": vpn.setKillSwitch(vpn.settings.killSwitch == 0)
+        case "p": vpn.setPortForwarding(!vpn.settings.portForwarding)
+        default: return false
+        }
+        return true
     }
 
     /// Shows or hides a country's cities and servers.
@@ -576,6 +620,7 @@ struct Panel: View {
                 .accessibilityLabel(vpn.update != nil ? "Settings, update available" : "Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand()
+                    .shortcutHint("Q")
                     .tip("Quit")
                     .accessibilityLabel("Quit")
             }

@@ -665,7 +665,7 @@ struct FeatureCard: View {
                         : "Only use it with apps you trust: the port is open to the internet.")
         case .shortcut:
             return ("Keyboard Shortcuts",
-                    "These work from any app.",
+                    "These work from any app. In the panel, hold ⌘ to see its own shortcuts.",
                     [],
                     "Use ⌘, ⌥ or ⌃ with a key, so it doesn't get in the way of typing.")
         }
@@ -770,6 +770,47 @@ extension VPN {
     func registerShortcuts() {
         HotKey.shared.register([shortcut.map { ($0, togglePanel) }, quickShortcut.map { ($0, quickConnectOrDisconnect) }]
             .compactMap { $0 })
+    }
+}
+
+/// Whether to show the panel's shortcuts on its buttons, while ⌘ is held.
+private struct ShortcutHintsKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var shortcutHints: Bool {
+        get { self[ShortcutHintsKey.self] }
+        set { self[ShortcutHintsKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// A button's shortcut, e.g. "F" for ⌘F, shown on it while ⌘ is held.
+    func shortcutHint(_ key: String?) -> some View { modifier(ShortcutHint(key: key)) }
+}
+
+struct ShortcutHint: ViewModifier {
+    let key: String?
+    @Environment(\.shortcutHints) private var visible
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .topTrailing) {
+            if let key, visible {
+                Text("⌘\(key)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .foregroundStyle(.primary)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.2), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    // Its own size, not squeezed to a small button's, like the power button's.
+                    .fixedSize()
+                    .offset(x: 4, y: -5)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
 
