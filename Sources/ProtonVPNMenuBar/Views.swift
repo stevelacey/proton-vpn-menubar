@@ -588,10 +588,6 @@ struct FeatureCard: View {
                             .focused($focused, equals: index)
                     }
                 }
-                if feature == .shortcut {
-                    ShortcutRecorder(vpn: vpn, title: "Open the panel", shortcut: $vpn.shortcut)
-                    ShortcutRecorder(vpn: vpn, title: "Quick Connect or Disconnect", shortcut: $vpn.quickShortcut)
-                }
                 if feature == .portForwarding, let port = vpn.status.port {
                     // Like Proton's: the port in a box of its own, ready to copy.
                     VStack(alignment: .leading, spacing: 4) {
@@ -663,13 +659,49 @@ struct FeatureCard: View {
                      Option(title: "Port Forwarding On", image: Icon.portForwarding(true), selected: on) { vpn.setPortForwarding(true) }],
                     vpn.status.port != nil ? "Enter the active port number into your BitTorrent app to improve your P2P speeds."
                         : "Only use it with apps you trust: the port is open to the internet.")
-        case .shortcut:
-            return ("Keyboard Shortcuts",
-                    "These work from any app. In the panel, hold ⌘ to see its own shortcuts.",
-                    [],
-                    "Use ⌘, ⌥ or ⌃ with a key, so it doesn't get in the way of typing.")
         }
     }
+}
+
+/// The shortcuts that work from any app, in a small window of their own like About.
+struct ShortcutsView: View {
+    @ObservedObject var vpn: VPN
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("These work from any app. In the panel, hold ⌘ to see its own shortcuts.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ShortcutRecorder(vpn: vpn, title: "Open the panel", shortcut: $vpn.shortcut)
+            ShortcutRecorder(vpn: vpn, title: "Quick Connect or Disconnect", shortcut: $vpn.quickShortcut)
+            Text("Use ⌘, ⌥ or ⌃ with a key, so it doesn't get in the way of typing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .frame(width: 320)
+    }
+}
+
+private var shortcutsWindow: NSWindow?
+
+/// Opens the Keyboard Shortcuts window, or brings it forward if it's open.
+@MainActor func showShortcuts(_ vpn: VPN) {
+    if shortcutsWindow == nil {
+        let content = NSHostingController(rootView: ShortcutsView(vpn: vpn))
+        let window = NSWindow(contentViewController: content)
+        window.title = "Keyboard Shortcuts"
+        window.styleMask = [.titled, .closable]
+        window.isReleasedWhenClosed = false
+        // Its size first, so it's centered on the screen like About rather than by its corner.
+        window.setContentSize(content.view.fittingSize)
+        window.center()
+        shortcutsWindow = window
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    shortcutsWindow?.makeKeyAndOrderFront(nil)
 }
 
 /// Records a shortcut: click, then press it; Esc cancels.

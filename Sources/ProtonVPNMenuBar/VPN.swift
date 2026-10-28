@@ -388,7 +388,7 @@ final class VPN: ObservableObject {
         return available(countries).first { $0.code == code }
     }
 
-    enum Feature { case secureCore, netShield, killSwitch, portForwarding, shortcut }
+    enum Feature { case secureCore, netShield, killSwitch, portForwarding }
 
     /// The feature whose card is open in the panel, to choose its setting.
     @Published var card: Feature?

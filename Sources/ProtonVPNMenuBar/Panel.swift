@@ -599,9 +599,7 @@ struct Panel: View {
                     SwiftUI.Toggle("Disconnect on Quit", isOn: Binding(get: { vpn.disconnectOnQuit == true },
                                                                         set: { vpn.disconnectOnQuit = $0 ? true : nil }))
                     SwiftUI.Toggle("Show Flag in Menu Bar", isOn: $vpn.showFlag)
-                    Button("Keyboard Shortcuts…") {
-                        vpn.card = .shortcut
-                    }
+                    Button("Keyboard Shortcuts…") { showShortcuts(vpn) }
                     Divider()
                     Button("Check for Updates…") { Task { await vpn.checkForUpdates(manual: true) } }
                     Button("About Proton VPN Menu Bar") { showAbout() }
