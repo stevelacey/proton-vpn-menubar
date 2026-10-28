@@ -1191,7 +1191,7 @@ extension VPN {
 
     enum QuitChoice { case quit, disconnectAndQuit, cancel }
 
-    /// Asks, while connected, whether to leave the VPN on (the CLI and Alfred can still use it) or
+    /// Asks, while connected, whether to leave the VPN on (the CLI can still use it) or
     /// disconnect before quitting.
     func askToQuit() -> QuitChoice {
         guard status.state != "Disconnected" else { return .quit }

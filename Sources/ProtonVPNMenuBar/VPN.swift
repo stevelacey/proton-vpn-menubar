@@ -132,7 +132,7 @@ final class VPN: ObservableObject {
         settingsWatcher = source
     }
 
-    /// Countries most recently connected to, wherever from (here, the CLI or Alfred), newest first.
+    /// Countries most recently connected to, wherever from (here or the CLI), newest first.
     /// Pinned countries, then recent ones.
     var recents: [Country] {
         (pinnedCodes + recentCodes.filter { !pinnedCodes.contains($0) })
@@ -285,7 +285,7 @@ final class VPN: ObservableObject {
             connectingCode = nil
             let lines = output.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             await refresh()
-            // A failure is old news if you've since connected somewhere else, e.g. from Alfred.
+            // A failure is old news if you've since connected somewhere else, e.g. from the CLI.
             let connectedSince = status.state == "Connected" && status != before
             // Red says it's an error, so without Proton's "Error: ".
             message = code == 0 || connectedSince ? nil
@@ -736,7 +736,7 @@ final class VPN: ObservableObject {
 
     var connecting: Bool { (busy?.hasPrefix("Connecting") ?? false) || status.state == "Connecting" }
 
-    /// Animates the icon while connecting, whether from here, the CLI or Alfred.
+    /// Animates the icon while connecting, whether from here or the CLI.
     private func animate() {
         if connecting, animation == nil {
             animation = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { [weak self] _ in
