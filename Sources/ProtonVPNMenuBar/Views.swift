@@ -706,6 +706,12 @@ struct OptionRow: View {
 
 /// Quitting, whether from the power button or Cmd-Q, asks first while connected.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated {
+            if urls.contains(where: { $0.host == "toggle" }) { VPN.shared.togglePanel() }
+        }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
             let vpn = VPN.shared
@@ -1004,20 +1010,31 @@ extension VPN {
     /// since closing the window itself leaves the item highlighted and the next click only closes
     /// what's already gone.
     func closePanel() {
+        if let button = statusButton, NSApp.keyWindow != nil {
+            button.performClick(nil)
+        } else {
+            NSApp.keyWindow?.close()
+        }
+    }
+
+    /// Opens the panel, or closes it if it's open, as clicking the menu bar item does; for
+    /// proton-vpn-menubar://toggle.
+    func togglePanel() {
+        NSApp.activate(ignoringOtherApps: true)
+        statusButton?.performClick(nil)
+    }
+
+    /// The menu bar item's button, which SwiftUI's MenuBarExtra doesn't expose.
+    private var statusButton: NSStatusBarButton? {
         func statusButton(in view: NSView?) -> NSStatusBarButton? {
             guard let view else { return nil }
             if let button = view as? NSStatusBarButton { return button }
             return view.subviews.lazy.compactMap { statusButton(in: $0) }.first
         }
-        let button = NSApp.windows
+        return NSApp.windows
             .filter { $0.className.contains("NSStatusBarWindow") }
             .lazy.compactMap { statusButton(in: $0.contentView) }
             .first
-        if let button, NSApp.keyWindow != nil {
-            button.performClick(nil)
-        } else {
-            NSApp.keyWindow?.close()
-        }
     }
 
     enum QuitChoice { case quit, disconnectAndQuit, cancel }
