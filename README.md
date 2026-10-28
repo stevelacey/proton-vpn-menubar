@@ -33,6 +33,8 @@ Proton's Mac app, not alongside it, since it runs its own VPN connection that th
 - 🔒 Secure Core, NetShield, kill switch and port forwarding
 - 🌐 DNS: Proton's, Cloudflare, Google, OpenDNS or Quad9
 - 🔄 Updates instantly when you connect from the CLI or Alfred
+- ⌨️ Keyboard friendly: arrow keys through the list, ⌘ shortcuts (hold ⌘ to see them), and global shortcuts to open the panel or quick connect
+- 📋 Click the IP or forwarded port to copy it
 - 🚀 Opens at login and can reconnect on launch
 
 ## Install
