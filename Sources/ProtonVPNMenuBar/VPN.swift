@@ -683,7 +683,8 @@ final class VPN: ObservableObject {
 
     var serverChoices: ServerChoices? {
         let current = status.server ?? ""
-        guard busy == nil, let code = status.code, let country = countries.first(where: { $0.code == code }),
+        // Proton Free connects to the server Proton picks, so there's nothing to switch to.
+        guard busy == nil, account?.free != true, let code = status.code, let country = countries.first(where: { $0.code == code }),
               let cities = cities(code) else { return nil }
         let others = cities.flatMap(\.servers).filter { $0.name != current }
         guard !others.isEmpty else { return nil }
