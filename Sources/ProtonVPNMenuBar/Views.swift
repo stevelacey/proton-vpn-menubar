@@ -132,7 +132,8 @@ struct CityRow: View {
                 Spacer()
                 // What its servers offer between them, e.g. which cities have P2P.
                 FeatureIcons(features: Array(Set(city.servers.flatMap(\.features))))
-                LoadBar(load: city.servers.map(\.load).reduce(0, +) / max(city.servers.count, 1))
+                let load = city.servers.map(\.load).reduce(0, +) / max(city.servers.count, 1)
+                LoadBar(load: load).tip("Load: \(load)%")
             }
         } accessory: {
             ExpandButton(expanded: expanded, action: toggleExpanded)
@@ -160,7 +161,7 @@ struct ServerRow: View {
                 if let state { StateDot(state: state) }
                 Spacer()
                 FeatureIcons(features: server.features)
-                LoadBar(load: server.load)
+                LoadBar(load: server.load).tip("Load: \(server.load)%")
             }
         }
         .padding(.leading, 16)
@@ -202,7 +203,6 @@ struct LoadBar: View {
             }
             .padding(.vertical, 6)
             .contentShape(Rectangle())
-            .tip("Load: \(load)%")
             .accessibilityElement()
             .accessibilityLabel("Load")
             .accessibilityValue("\(load)%")
