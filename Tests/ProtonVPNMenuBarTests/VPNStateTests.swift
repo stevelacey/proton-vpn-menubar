@@ -164,6 +164,52 @@ import Testing
         #expect(vpn.busyTitle("Turning NetShield off…") == "Turning NetShield off…")
     }
 
+    @Test func busyTitleKeepsAPickedCityOrServer() {
+        let vpn = Harness().vpn
+        vpn.status = Status(state: "Connecting", server: "JP#1", code: "JP", country: "Japan")
+        #expect(vpn.busyTitle("Connecting to Tokyo…") == "Connecting to Tokyo…")
+        #expect(vpn.busyTitle("Connecting to JP#1…") == "Connecting to JP#1…")
+    }
+
+    @Test func marksThePickedCityOrServer() {
+        let harness = Harness()
+        harness.fake.respond("city Tokyo", "", after: 5)
+        let vpn = harness.vpn
+        let tokyo = { (city: String?, server: String?) in vpn.isActive(code: "JP", city: city, server: server) }
+        // Picked: marked straight away, before the connection says where it is.
+        vpn.connect(city: "Tokyo", in: japan, picked: true)
+        #expect(vpn.pick == VPN.Pick(code: "JP", city: "Tokyo"))
+        #expect(tokyo("Tokyo", nil) && !tokyo("Osaka", nil) && !tokyo(nil, "JP#1"))
+        #expect(!vpn.isActive(code: "CH", city: "Tokyo"))
+        vpn.connectingCode = nil
+        // Connected: the server it's on, and the city only if it was picked.
+        vpn.status = Status(state: "Connected", server: "JP#1", code: "JP", city: "Tokyo")
+        #expect(tokyo(nil, "JP#1") && !tokyo(nil, "JP#2"))
+        #expect(tokyo("Tokyo", nil))
+        vpn.pick = nil
+        #expect(!tokyo("Tokyo", nil))
+        vpn.status = Status(state: "Disconnected")
+        #expect(!tokyo(nil, "JP#1"))
+    }
+
+    @Test func connectingAnyOtherWayForgetsThePick() async {
+        let harness = Harness()
+        let vpn = harness.vpn
+        let server = Server(name: "JP#1", load: 1, entry: nil, features: [])
+        vpn.connect(server: server, in: japan, picked: true)
+        #expect(vpn.pick == VPN.Pick(code: "JP", server: "JP#1"))
+        await eventually { vpn.busy == nil }
+        vpn.connect(server: server, in: japan)
+        #expect(vpn.pick == nil)
+        await eventually { vpn.busy == nil }
+        for connect in [{ vpn.connect(japan) }, { vpn.fastest() }, { vpn.random() }] {
+            vpn.pick = VPN.Pick(code: "JP", city: "Tokyo")
+            connect()
+            #expect(vpn.pick == nil)
+            await eventually { vpn.busy == nil }
+        }
+    }
+
     @Test func iconFollowsTheConnection() {
         resourceDirectory = repoResources
         let vpn = Harness().vpn

@@ -96,6 +96,8 @@ struct ExpandButton: View {
 /// A city in an expanded country; connects to its fastest server.
 struct CityRow: View {
     let city: City
+    /// The connection's state when it's this city, for its dot.
+    var state: String?
     let expanded: Bool
     let toggleExpanded: () -> Void
     let action: () -> Void
@@ -105,6 +107,7 @@ struct CityRow: View {
             HStack(spacing: 8) {
                 Image(systemName: "mappin.and.ellipse").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
                 Text(city.city)
+                if let state { StateDot(state: state) }
                 Spacer()
                 Text("\(city.servers.count)").font(.caption).foregroundStyle(.secondary)
                 ExpandButton(expanded: expanded, action: toggleExpanded)
@@ -118,25 +121,47 @@ struct CityRow: View {
 struct ServerRow: View {
     let server: Server
     let country: String
-    let current: Bool
+    /// The connection's state when it's this server, for its dot.
+    var state: String?
     let action: () -> Void
 
     var body: some View {
         HoverButton(action: action) {
             HStack(spacing: 8) {
-                Text(server.name).fontWeight(current ? .semibold : .regular).monospacedDigit()
+                Text(server.name).monospacedDigit()
                 if let entry = server.entry, entry != country {
                     Text("via \(flag(entry))").font(.caption).foregroundStyle(.secondary)
                 }
-                if current {
-                    Circle().fill(.green).frame(width: 6, height: 6)
-                }
+                if let state { StateDot(state: state) }
                 Spacer()
                 FeatureIcons(features: server.features)
                 LoadBar(load: server.load)
             }
         }
         .padding(.leading, 16)
+    }
+}
+
+/// The color of a connection's state, as on the connected country's row.
+func stateTint(_ state: String) -> Color {
+    switch state {
+    case "Connected": return .green
+    case "Dropped": return .orange
+    default: return .accentColor
+    }
+}
+
+/// A dot by the city or server you're connecting or connected to, pulsing while connecting.
+struct StateDot: View {
+    let state: String
+
+    var body: some View {
+        TimelineView(.animation(paused: state != "Connecting")) { timeline in
+            let pulse = state == "Connecting" ? (sin(timeline.date.timeIntervalSinceReferenceDate * 4) + 1) / 2 : 1
+            Circle().fill(stateTint(state).opacity(0.4 + 0.6 * pulse)).frame(width: 6, height: 6)
+        }
+        .accessibilityElement()
+        .accessibilityLabel(state)
     }
 }
 
@@ -383,13 +408,7 @@ struct ActiveCountryRow: View {
     let disconnect: () -> Void
     @State private var hovering = false
 
-    var tint: Color {
-        switch state {
-        case "Connected": return .green
-        case "Dropped": return .orange
-        default: return .accentColor
-        }
-    }
+    var tint: Color { stateTint(state) }
 
     var body: some View {
         Button(action: disconnect) {

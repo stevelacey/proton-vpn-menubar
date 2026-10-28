@@ -159,6 +159,27 @@ final class VPN: ObservableObject {
 
     var activeState: String { connectingCode != nil ? "Connecting" : status.state }
 
+    /// A city or server picked from the list, marked there while it's the connection.
+    struct Pick: Equatable {
+        var code: String
+        var city: String?
+        var server: String?
+    }
+
+    @Published var pick: Pick?
+
+    /// Whether a city or server is the one being connected to or connected, for its dot in the list:
+    /// what was picked, as soon as it's picked, or the connection's own server and city.
+    func isActive(code: String, city: String? = nil, server: String? = nil) -> Bool {
+        if let pick, connectingCode != nil {
+            return pick.code == code && (server.map { $0 == pick.server } ?? (pick.city == city))
+        }
+        guard status.state != "Disconnected", status.code == code else { return false }
+        if let server { return status.server == server }
+        // A city's dot is for one picked, not wherever fastest or random happened to land.
+        return pick?.city == city && status.city == city
+    }
+
     /// Adds a newly used country to the top; ones already listed stay put, so the list doesn't shuffle.
     private func remember(_ code: String) {
         guard !recentCodes.contains(code) else { return }
@@ -311,28 +332,34 @@ final class VPN: ObservableObject {
     /// Loads change all the time, so lists are fetched again the next time.
     func forgetServers() { serverLists = [:] }
 
-    func connect(city: String, in country: Country) {
+    /// Connects to a city's fastest server; `picked` when chosen from the list, to mark it there.
+    func connect(city: String, in country: Country, picked: Bool = false) {
         guard busy == nil else { return }
         connectingCode = country.code
+        pick = picked ? Pick(code: country.code, city: city) : nil
         run("Connecting to \(city)…", ["city"] + modeWords + [city])
     }
 
-    func connect(server: Server, in country: Country) {
+    func connect(server: Server, in country: Country, picked: Bool = false) {
         guard busy == nil else { return }
         connectingCode = country.code
+        pick = picked ? Pick(code: country.code, server: server.name) : nil
         run("Connecting to \(server.name)…", [server.name])
     }
 
     func connect(_ country: Country) {
         guard busy == nil else { return }
         connectingCode = country.code
+        pick = nil
         run("Connecting to \(country.name)…", modeWords + [country.code])
     }
     func fastest() {
+        pick = nil
         run("Connecting…", modeWords + ["fastest"])
     }
 
     func random() {
+        pick = nil
         run("Connecting…", modeWords + ["random"])
     }
 
@@ -608,7 +635,8 @@ final class VPN: ObservableObject {
     /// What's in progress, saying where it's connecting to once Proton's picked a server, e.g. for
     /// Fastest or Random.
     func busyTitle(_ busy: String) -> String {
-        guard busy.hasPrefix("Connecting") || busy.hasPrefix("Reconnecting"), status.state == "Connecting",
+        // Only for fastest and random, which don't say where; a city or server keeps its own name.
+        guard busy == "Connecting…" || busy == "Reconnecting…", status.state == "Connecting",
               let country = status.country else { return busy }
         return "Connecting to \(country)…"
     }

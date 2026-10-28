@@ -249,11 +249,12 @@ struct Panel: View {
                 serverRows(cities[0], in: c)
             } else {
                 ForEach(cities) { city in
-                    CityRow(city: city, expanded: expandedCity == city.city, toggleExpanded: {
+                    CityRow(city: city, state: vpn.isActive(code: c.code, city: city.city) ? vpn.activeState : nil,
+                            expanded: expandedCity == city.city, toggleExpanded: {
                         serverLimit = serverPage
                         expandedCity = expandedCity == city.city ? nil : city.city
                     }) {
-                        vpn.connect(city: city.city, in: c)
+                        vpn.connect(city: city.city, in: c, picked: true)
                     }
                     if expandedCity == city.city {
                         serverRows(city, in: c).padding(.leading, 16)
@@ -268,8 +269,9 @@ struct Panel: View {
     @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
         let servers = city.servers
         ForEach(servers.prefix(serverLimit)) { server in
-            ServerRow(server: server, country: c.code, current: vpn.status.server == server.name) {
-                vpn.connect(server: server, in: c)
+            ServerRow(server: server, country: c.code,
+                      state: vpn.isActive(code: c.code, server: server.name) ? vpn.activeState : nil) {
+                vpn.connect(server: server, in: c, picked: true)
             }
         }
         if servers.count > serverLimit {
