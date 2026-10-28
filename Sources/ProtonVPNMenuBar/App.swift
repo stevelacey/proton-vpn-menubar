@@ -11,6 +11,7 @@ struct ProtonVPNMenuBar: App {
             Panel(vpn: vpn)
         } label: {
             Image(nsImage: vpn.icon)
+                .accessibilityLabel("Proton VPN, \(vpn.activeState == "Connected" ? "connected to \(vpn.status.country ?? "a server")" : vpn.activeState.lowercased())")
         }
         .menuBarExtraStyle(.window)
     }

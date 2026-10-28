@@ -58,6 +58,11 @@ struct FeatureIcons: View {
         }
         .font(.system(size: 10))
         .foregroundStyle(.secondary)
+        // Read out as one list, e.g. "P2P, Streaming".
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(["p2p", "tor", "streaming", "smartrouting"].filter(features.contains)
+            .map { featureTips[$0]!.components(separatedBy: ":")[0] }.joined(separator: ", "))
+        .accessibilityHidden(features.isEmpty)
     }
 }
 
@@ -74,7 +79,7 @@ struct CountryRow: View {
     var body: some View {
         HoverButton(highlighted: highlighted, action: action) {
             HStack(spacing: 8) {
-                Text(flag(country.code))
+                Text(flag(country.code)).accessibilityHidden(true)
                 Text(country.name)
                 Spacer()
                 FeatureIcons(features: country.features)
@@ -102,6 +107,7 @@ struct ExpandButton: View {
         }
         .buttonStyle(.plain).pointingHand()
         .tip(expanded ? "Hide servers" : "Show servers")
+        .accessibilityLabel(expanded ? "Hide servers" : "Show servers")
     }
 }
 
@@ -119,6 +125,7 @@ struct CityRow: View {
         HoverButton(highlighted: highlighted, action: action) {
             HStack(spacing: 8) {
                 Image(systemName: "mappin.and.ellipse").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
+                    .accessibilityHidden(true)
                 Text(city.city)
                 if let state { StateDot(state: state) }
                 Spacer()
@@ -195,6 +202,9 @@ struct LoadBar: View {
             .padding(.vertical, 6)
             .contentShape(Rectangle())
             .tip("Load: \(load)%")
+            .accessibilityElement()
+            .accessibilityLabel("Load")
+            .accessibilityValue("\(load)%")
     }
 }
 
@@ -208,6 +218,7 @@ struct CopyButton: View {
             NSPasteboard.general.setString(value, forType: .string)
         } label: { Image(systemName: "doc.on.doc") }
             .buttonStyle(.plain).pointingHand().tip("Copy")
+            .accessibilityLabel("Copy \(value)")
     }
 }
 
@@ -306,6 +317,9 @@ struct FilterButton: View {
         }
         .buttonStyle(.plain).pointingHand()
         .tip(tip)
+        .accessibilityLabel(title)
+        .accessibilityHint(tip)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -410,6 +424,7 @@ struct PinButton: View {
         // Also shown when the keyboard focuses it, so pinning doesn't need a mouse.
         .opacity(pinned || visible || focused ? 1 : 0)
         .tip(pinned ? "Unpin" : "Pin to the top")
+        .accessibilityLabel(pinned ? "Unpin" : "Pin to the top")
     }
 }
 
@@ -433,7 +448,7 @@ struct ActiveCountryRow: View {
             // Pin and expand beside the row's button rather than in it, so Space on them presses them.
             Button(action: disconnect) {
                 HStack(spacing: 8) {
-                    Text(flag(country.code))
+                    Text(flag(country.code)).accessibilityHidden(true)
                     Text(country.name).fontWeight(.semibold)
                     Spacer()
                     FeatureIcons(features: country.features)
@@ -442,6 +457,8 @@ struct ActiveCountryRow: View {
             }
             .buttonStyle(.plain).pointingHand()
             .tip(state == "Connecting" ? "Cancel" : "Disconnect")
+            .accessibilityValue(state)
+            .accessibilityHint(state == "Connecting" ? "Cancels connecting" : "Disconnects")
             .accessibilityAddTraits(highlighted ? .isSelected : [])
             PinButton(pinned: pinned, visible: hovering, action: togglePin)
             ExpandButton(expanded: expanded, action: toggleExpanded)
@@ -558,6 +575,7 @@ struct FeatureCard: View {
                         .buttonStyle(.plain).pointingHand()
                         .foregroundStyle(.secondary)
                         .tip("Close")
+                        .accessibilityLabel("Close")
                 }
                 Text(content.text)
                     .font(.callout)
@@ -594,6 +612,10 @@ struct FeatureCard: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .windowBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))
             .padding(16)
+            // VoiceOver stays in the card too, as focus does.
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isModal)
+            .accessibilityLabel(content.title)
         }
         .onAppear {
             // Off whatever had focus behind the card, e.g. Disconnect, onto its current option.
@@ -677,6 +699,8 @@ struct OptionRow: View {
         .buttonStyle(.plain).pointingHand()
         .disabled(!option.enabled)
         .onHover { hovering = $0 }
+        .accessibilityLabel(option.title)
+        .accessibilityAddTraits(option.selected ? .isSelected : [])
     }
 }
 
@@ -713,6 +737,7 @@ struct InstallCLI: View {
                 Spacer()
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
+                    .accessibilityLabel("Quit")
             }
             Text("This app runs on the Proton VPN CLI for macOS. Install it with Homebrew:")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -743,12 +768,14 @@ struct SignInForm: View {
                 Spacer()
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
+                    .accessibilityLabel("Quit")
             }
             .padding(.bottom, -14)
             VStack(spacing: 6) {
                 Image(nsImage: resource("AppIcon", template: false))
                     .resizable()
                     .frame(width: 56, height: 56)
+                    .accessibilityHidden(true)
                 Text(isCode ? "Two-factor authentication" : "Sign in to Proton VPN")
                     .font(.title2.weight(.semibold))
                 if isCode {
@@ -795,7 +822,7 @@ struct SignInForm: View {
 
             Divider()
             HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "checkmark.shield").foregroundStyle(.secondary)
+                Image(systemName: "checkmark.shield").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text("Signs in with the Proton VPN CLI for macOS, straight to Proton. Your password isn't stored; the session is kept in your Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -817,12 +844,15 @@ struct SignInForm: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Spacer()
                 if let link {
                     Link(link.0, destination: URL(string: link.1)!).font(.caption)
                 }
             }
             input()
+                // The fields have no placeholders, so the label above names them.
+                .accessibilityLabel(label)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -833,6 +863,7 @@ struct SignInForm: View {
 
     func errorText(_ text: String) -> some View {
         Text(text)
+            .accessibilityLabel("Error: \(text)")
             .font(.callout)
             .foregroundStyle(notConnected)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -883,6 +914,9 @@ struct Toggle: View {
         }
         .buttonStyle(.plain).pointingHand()
         .onHover { hovering = $0 && enabled }
+        .accessibilityLabel(title)
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityHint("Shows its options")
     }
 }
 

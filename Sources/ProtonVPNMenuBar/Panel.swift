@@ -37,7 +37,7 @@ struct Panel: View {
 
             if vpn.needsSetup {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "key.fill").foregroundStyle(.orange)
+                    Image(systemName: "key.fill").foregroundStyle(.orange).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("One more step").font(.callout.weight(.semibold))
                         Text("Connecting needs root for WireGuard and the kill switch. Set up once, with your Mac's password, and it won't ask again.")
@@ -54,7 +54,7 @@ struct Panel: View {
             if vpn.account?.free == true {
                 QuickConnectButton(vpn: vpn)
                 HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    Image(systemName: "info.circle").foregroundStyle(.secondary).accessibilityHidden(true)
                     Text("On Proton Free, Proton picks the server. Plus adds countries, Secure Core, P2P and NetShield. ")
                         .foregroundStyle(.secondary)
                     + Text("[Upgrade](https://protonvpn.com/pricing)")
@@ -76,6 +76,16 @@ struct Panel: View {
         .onKeyPress(keys: [.leftArrow, .rightArrow], action: expandKey)
         // While a feature's card is open, it's all you can reach, by mouse or keyboard.
         .disabled(vpn.card != nil)
+        // What the panel shows changing, said out loud for VoiceOver.
+        .onChange(of: vpn.status.state) { _, state in
+            let place = vpn.status.country ?? vpn.status.server ?? "Proton VPN"
+            let words = ["Connected": "Connected to \(place)", "Dropped": "Connection dropped",
+                         "Disconnected": "Disconnected"][state]
+            if let words { AccessibilityNotification.Announcement(words).post() }
+        }
+        .onChange(of: vpn.message) { _, message in
+            if let message { AccessibilityNotification.Announcement(message).post() }
+        }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 // Esc closes a feature's card even when nothing in it has focus, which needs a key to go anywhere.
@@ -241,7 +251,7 @@ struct Panel: View {
     @ViewBuilder var countries: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
                 TextField(vpn.secureCore ? "Search Secure Core countries" : "Search countries", text: $query)
                     .focused($searchFocused)
                     .textFieldStyle(.plain)
@@ -257,6 +267,7 @@ struct Panel: View {
                 if !query.isEmpty {
                     Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).pointingHand()
+                        .accessibilityLabel("Clear search")
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 0) {
@@ -425,6 +436,8 @@ struct Panel: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .tip("Change DNS")
+        .accessibilityLabel("DNS \(current)")
+        .accessibilityHint("Changes DNS")
     }
 
     @ViewBuilder var header: some View {
@@ -443,7 +456,7 @@ struct Panel: View {
                 switch vpn.status.state {
                 case "Connected":
                     HStack(spacing: 6) {
-                        Text(flag(vpn.status.code ?? ""))
+                        Text(flag(vpn.status.code ?? "")).accessibilityHidden(true)
                         // The server's name gives way first, when it and a long country don't fit.
                         Text(vpn.status.country ?? "").fontWeight(.semibold).lineLimit(1).layoutPriority(1)
                         serverMenu
@@ -501,11 +514,18 @@ struct Panel: View {
                             Text("\(load)%").fontWeight(.medium).monospacedDigit()
                         }
                         .fixedSize()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Server load")
+                        .accessibilityValue("\(load)%")
                     }
                     Spacer(minLength: 8)
                     if let speeds = vpn.speeds {
                         detail("↓", rate(speeds.down))
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Download \(rate(speeds.down))")
                         detail("↑", rate(speeds.up)).padding(.leading, 6)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Upload \(rate(speeds.up))")
                     }
                 }
                 .font(.callout)
@@ -513,6 +533,7 @@ struct Panel: View {
             }
             if let message = vpn.message {
                 Text(message).foregroundStyle(.red).font(.caption).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Error: \(message)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -549,9 +570,11 @@ struct Panel: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .tip("Settings")
+                .accessibilityLabel(vpn.update != nil ? "Settings, update available" : "Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand()
                     .tip("Quit")
+                    .accessibilityLabel("Quit")
             }
             .font(.system(size: 14))
             .foregroundStyle(.secondary)
