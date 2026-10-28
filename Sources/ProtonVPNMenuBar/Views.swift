@@ -12,23 +12,37 @@ struct HeightKey: PreferenceKey {
 let notConnected = Color(red: 0.91, green: 0.42, blue: 0.47)
 
 /// A full-width row that highlights on hover, like a menu item.
-struct HoverButton<Label: View>: View {
+struct HoverButton<Label: View, Accessory: View>: View {
     var highlighted = false
     let action: () -> Void
     @ViewBuilder let label: Label
+    /// Buttons at the end, such as pin and expand: beside the row's own button rather than in it, so
+    /// Space on one of them presses it, not the row.
+    @ViewBuilder var accessory: Accessory
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
-            label
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovering || highlighted ? Color.primary.opacity(0.1) : .clear))
+        HStack(spacing: 8) {
+            Button(action: action) {
+                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).pointingHand()
+            accessory
         }
-        .buttonStyle(.plain).pointingHand()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(hovering || highlighted ? Color.primary.opacity(0.1) : .clear))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
         .onHover { hovering = $0 }
+        // The row picked with the arrow keys.
+        .accessibilityAddTraits(highlighted ? .isSelected : [])
+    }
+}
+
+extension HoverButton where Accessory == EmptyView {
+    init(highlighted: Bool = false, action: @escaping () -> Void, @ViewBuilder label: () -> Label) {
+        self.init(highlighted: highlighted, action: action, label: label, accessory: { EmptyView() })
     }
 }
 
@@ -64,9 +78,10 @@ struct CountryRow: View {
                 Text(country.name)
                 Spacer()
                 FeatureIcons(features: country.features)
-                PinButton(pinned: pinned, visible: hovering, action: togglePin)
-                ExpandButton(expanded: expanded, action: toggleExpanded)
             }
+        } accessory: {
+            PinButton(pinned: pinned, visible: hovering, action: togglePin)
+            ExpandButton(expanded: expanded, action: toggleExpanded)
         }
         .onHover { hovering = $0 }
     }
@@ -93,6 +108,7 @@ struct ExpandButton: View {
 /// A city in an expanded country; connects to its fastest server.
 struct CityRow: View {
     let city: City
+    var highlighted = false
     /// The connection's state when it's this city, for its dot.
     var state: String?
     let expanded: Bool
@@ -100,7 +116,7 @@ struct CityRow: View {
     let action: () -> Void
 
     var body: some View {
-        HoverButton(action: action) {
+        HoverButton(highlighted: highlighted, action: action) {
             HStack(spacing: 8) {
                 Image(systemName: "mappin.and.ellipse").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
                 Text(city.city)
@@ -109,8 +125,9 @@ struct CityRow: View {
                 // What its servers offer between them, e.g. which cities have P2P.
                 FeatureIcons(features: Array(Set(city.servers.flatMap(\.features))))
                 LoadBar(load: city.servers.map(\.load).reduce(0, +) / max(city.servers.count, 1))
-                ExpandButton(expanded: expanded, action: toggleExpanded)
             }
+        } accessory: {
+            ExpandButton(expanded: expanded, action: toggleExpanded)
         }
         .padding(.leading, 16)
     }
@@ -122,10 +139,11 @@ struct ServerRow: View {
     let country: String
     /// The connection's state when it's this server, for its dot.
     var state: String?
+    var highlighted = false
     let action: () -> Void
 
     var body: some View {
-        HoverButton(action: action) {
+        HoverButton(highlighted: highlighted, action: action) {
             HStack(spacing: 8) {
                 Text(server.name).monospacedDigit()
                 if let entry = server.entry, entry != country {
@@ -400,6 +418,7 @@ struct PinButton: View {
 struct ActiveCountryRow: View {
     let country: Country
     let state: String
+    var highlighted = false
     let expanded: Bool
     let toggleExpanded: () -> Void
     let pinned: Bool
@@ -410,36 +429,45 @@ struct ActiveCountryRow: View {
     var tint: Color { stateTint(state) }
 
     var body: some View {
-        Button(action: disconnect) {
-            HStack(spacing: 8) {
-                Text(flag(country.code))
-                Text(country.name).fontWeight(.semibold)
-                Spacer()
-                FeatureIcons(features: country.features)
-                PinButton(pinned: pinned, visible: hovering, action: togglePin)
-                ExpandButton(expanded: expanded, action: toggleExpanded)
+        HStack(spacing: 8) {
+            // Pin and expand beside the row's button rather than in it, so Space on them presses them.
+            Button(action: disconnect) {
+                HStack(spacing: 8) {
+                    Text(flag(country.code))
+                    Text(country.name).fontWeight(.semibold)
+                    Spacer()
+                    FeatureIcons(features: country.features)
+                }
+                .contentShape(Rectangle())
             }
-            // The same as the other rows, so the list doesn't change height as you connect.
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain).pointingHand()
+            .tip(state == "Connecting" ? "Cancel" : "Disconnect")
+            .accessibilityAddTraits(highlighted ? .isSelected : [])
+            PinButton(pinned: pinned, visible: hovering, action: togglePin)
+            ExpandButton(expanded: expanded, action: toggleExpanded)
         }
-        .buttonStyle(.plain).pointingHand()
+        // The same as the other rows, so the list doesn't change height as you connect.
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: disconnect)
         .onHover { hovering = $0 }
-        .tip(state == "Connecting" ? "Cancel" : "Disconnect")
         .background {
             if state == "Connecting" {
                 // Pulses while connecting.
                 TimelineView(.animation) { timeline in
                     let pulse = (sin(timeline.date.timeIntervalSinceReferenceDate * 4) + 1) / 2
-                    RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.1 + 0.25 * pulse))
+                    RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.1 + 0.25 * pulse + lift))
                 }
             } else {
-                RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.18))
+                RoundedRectangle(cornerRadius: 6).fill(tint.opacity(0.18 + lift))
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(tint.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(tint.opacity(0.45 + lift)))
     }
+
+    /// Stronger when hovered or picked with the arrow keys, as Return then disconnects or cancels.
+    var lift: Double { hovering || highlighted ? 0.15 : 0 }
 }
 
 /// macOS's standard About window, with credits linking to the project and its siblings.
@@ -508,6 +536,7 @@ enum Icon {
 struct FeatureCard: View {
     @ObservedObject var vpn: VPN
     let feature: VPN.Feature
+    @FocusState private var focused: Int?
 
     struct Option {
         let title: String
@@ -537,6 +566,7 @@ struct FeatureCard: View {
                 VStack(spacing: 6) {
                     ForEach(content.options.indices, id: \.self) { index in
                         OptionRow(option: content.options[index]) { vpn.card = nil }
+                            .focused($focused, equals: index)
                     }
                 }
                 if feature == .portForwarding, let port = vpn.status.port {
@@ -564,6 +594,11 @@ struct FeatureCard: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .windowBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.12)))
             .padding(16)
+        }
+        .onAppear {
+            // Off whatever had focus behind the card, e.g. Disconnect, onto its current option.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            focused = content.options.firstIndex(where: \.selected) ?? 0
         }
     }
 

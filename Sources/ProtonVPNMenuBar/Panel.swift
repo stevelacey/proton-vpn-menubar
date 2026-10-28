@@ -8,11 +8,12 @@ struct Panel: View {
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     /// The row the arrow keys have moved to, which Enter picks.
-    @State private var selection: Int?
+    @State private var selection: ListItem?
     @State private var expanded: String?
     @State private var expandedCity: String?
     @State private var listHeight: CGFloat = 0
     @State private var titleHovered = false
+    @State private var keyMonitor: Any?
 
     var body: some View {
         Group {
@@ -66,7 +67,24 @@ struct Panel: View {
         }
         .padding(12)
         .frame(width: 320)
+        // Up and down move through the list, as in Spotlight, from wherever focus is, which goes back
+        // to the search field; Tab still moves between the controls.
+        .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+            searchFocused = true
+            return move(down: press.key == .downArrow)
+        }
+        .onKeyPress(keys: [.leftArrow, .rightArrow], action: expandKey)
+        // While a feature's card is open, it's all you can reach, by mouse or keyboard.
+        .disabled(vpn.card != nil)
         .onAppear {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                // Esc closes a feature's card even when nothing in it has focus, which needs a key to go anywhere.
+                if event.keyCode == 53, vpn.card != nil {
+                    vpn.card = nil
+                    return nil
+                }
+                return event
+            }
             // Start in the search field each time, rather than wherever macOS puts focus.
             searchFocused = true
             Task {
@@ -82,6 +100,8 @@ struct Panel: View {
             }
         }
         .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
             vpn.card = nil
             query = ""
             selection = nil
@@ -130,6 +150,94 @@ struct Panel: View {
             countries
     }
 
+    /// Shows or hides a country's cities and servers.
+    func expand(_ c: Country, _ open: Bool) {
+        expandedCity = nil
+        expanded = open ? c.code : nil
+        if open { Task { await vpn.loadServers(c.code) } }
+    }
+
+    /// Right and left expand and collapse the row picked with the arrows, as in Finder's list view, left on
+    /// a server or city going up to its city or country, and Space toggles it, or on a server connects to
+    /// it like Return. Only while a row's picked:
+    /// typing clears that, so then they're the search field's again.
+    func expandKey(_ press: KeyPress) -> KeyPress.Result {
+        guard let selection else { return .ignored }
+        let key = press.key
+        switch (selection, key) {
+        case (.country(let code), .rightArrow), (.country(let code), .leftArrow), (.country(let code), .space):
+            guard let c = listed.first(where: { $0.code == code }) else { return .ignored }
+            expand(c, key == .space ? expanded != code : key == .rightArrow)
+        case (.city(_, let name), .rightArrow), (.city(_, let name), .space):
+            expandedCity = key == .space && expandedCity == name ? nil : name
+        case (.city(let code, let name), .leftArrow):
+            if expandedCity == name { expandedCity = nil } else { self.selection = .country(code) }
+        case (.server, .space):
+            // Nothing to expand, so Space connects, like Return.
+            choose(selection)
+        case (.server(let code, let name), .leftArrow):
+            let city = vpn.cities(code)?.first { $0.servers.contains { $0.name == name } }
+            self.selection = (vpn.cities(code)?.count ?? 0) > 1 && city != nil ? .city(code, city!.city) : .country(code)
+        default:
+            return .ignored
+        }
+        return .handled
+    }
+
+    /// Moves the highlight down or up the list's rows, into expanded countries and cities too.
+    func move(down: Bool) -> KeyPress.Result {
+        let rows = navigable
+        let index = selection.flatMap(rows.firstIndex(of:))
+        if down {
+            selection = rows.isEmpty ? nil : rows[min((index ?? -1) + 1, rows.count - 1)]
+        } else {
+            selection = (index ?? 0) > 0 ? rows[index! - 1] : nil
+        }
+        return .handled
+    }
+
+    /// A row the arrow keys can pick.
+    enum ListItem: Hashable {
+        case country(String)
+        case city(String, String)
+        case server(String, String)
+    }
+
+    /// The rows as listed, with an expanded country's cities or servers, and an expanded city's servers.
+    var navigable: [ListItem] {
+        listed.flatMap { c -> [ListItem] in
+            var rows: [ListItem] = [.country(c.code)]
+            guard expanded == c.code, let cities = vpn.cities(c.code) else { return rows }
+            let servers = { (city: City) in city.servers.map { ListItem.server(c.code, $0.name) } }
+            if cities.count == 1 {
+                rows += servers(cities[0])
+            } else {
+                for city in cities {
+                    rows.append(.city(c.code, city.city))
+                    if expandedCity == city.city { rows += servers(city) }
+                }
+            }
+            return rows
+        }
+    }
+
+    /// Return on the picked row: connects there, or disconnects from the current country.
+    func choose(_ item: ListItem) {
+        switch item {
+        case .country(let code):
+            guard let c = listed.first(where: { $0.code == code }) else { return }
+            code == vpn.activeCode ? vpn.disconnect() : vpn.connect(c)
+        case .city(let code, let name):
+            guard let c = listed.first(where: { $0.code == code }) else { return }
+            vpn.connect(city: name, in: c, picked: true)
+        case .server(let code, let name):
+            guard let c = listed.first(where: { $0.code == code }),
+                  let server = vpn.cities(code)?.flatMap(\.servers).first(where: { $0.name == name }) else { return }
+            vpn.connect(server: server, in: c, picked: true)
+        }
+        query = ""
+    }
+
     @ViewBuilder var countries: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -137,20 +245,13 @@ struct Panel: View {
                 TextField(vpn.secureCore ? "Search Secure Core countries" : "Search countries", text: $query)
                     .focused($searchFocused)
                     .textFieldStyle(.plain)
+                    // The text field takes the arrows itself before the panel would.
+                    .onKeyPress(keys: [.upArrow, .downArrow]) { move(down: $0.key == .downArrow) }
+                    .onKeyPress(keys: [.leftArrow, .rightArrow, .space], action: expandKey)
                     .onSubmit {
-                        if let country = highlighted ?? vpn.search(query).first {
-                            country.code == vpn.activeCode ? vpn.disconnect() : vpn.connect(country)
-                            query = ""
+                        if let item = selection ?? vpn.search(query).first.map({ ListItem.country($0.code) }) {
+                            choose(item)
                         }
-                    }
-                    // Up and down move through the list, as in Spotlight.
-                    .onKeyPress(.downArrow) {
-                        selection = min((selection ?? -1) + 1, listed.count - 1)
-                        return .handled
-                    }
-                    .onKeyPress(.upArrow) {
-                        selection = (selection ?? 0) > 0 ? selection! - 1 : nil
-                        return .handled
                     }
                     .onChange(of: query) { selection = nil }
                 if !query.isEmpty {
@@ -195,37 +296,38 @@ struct Panel: View {
                     .font(.caption).foregroundStyle(.secondary).padding(8)
             }
             // Scrolls once it's taller than the screen allows, and otherwise fits its rows exactly.
-            ScrollView {
-                // Lazy, so a country with hundreds of servers only builds the rows in sight.
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(list.enumerated()), id: \.element.id) { index, c in
-                        if index == restStart {
-                            Divider().padding(.vertical, 4)
-                        }
-                        row(c)
-                        if expanded == c.code {
-                            servers(c)
+            ScrollViewReader { scroller in
+                ScrollView {
+                    // Lazy, so a country with hundreds of servers only builds the rows in sight.
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(list.enumerated()), id: \.element.id) { index, c in
+                            if index == restStart {
+                                Divider().padding(.vertical, 4)
+                            }
+                            row(c).id(ListItem.country(c.code))
+                            if expanded == c.code {
+                                servers(c)
+                            }
                         }
                     }
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: HeightKey.self, value: geometry.size.height)
+                    })
                 }
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: HeightKey.self, value: geometry.size.height)
-                })
+                .frame(height: min(listHeight, 300))
+                .onPreferenceChange(HeightKey.self) { listHeight = $0 }
+                // Keeps the row picked with the arrows in sight.
+                .onChange(of: selection) { if let selection { scroller.scrollTo(selection) } }
             }
-            .frame(height: min(listHeight, 300))
-            .onPreferenceChange(HeightKey.self) { listHeight = $0 }
         }
     }
 
     @ViewBuilder func row(_ c: Country) -> some View {
-        let toggle = {
-            expandedCity = nil
-            expanded = expanded == c.code ? nil : c.code
-            if expanded != nil { Task { await vpn.loadServers(c.code) } }
-        }
+        let toggle = { expand(c, expanded != c.code) }
         if c.code == vpn.activeCode {
             // The current connection stays in its place, highlighted.
-            ActiveCountryRow(country: c, state: vpn.activeState, expanded: expanded == c.code, toggleExpanded: toggle,
+            ActiveCountryRow(country: c, state: vpn.activeState, highlighted: highlighted?.code == c.code,
+                             expanded: expanded == c.code, toggleExpanded: toggle,
                              pinned: vpn.pinnedCodes.contains(c.code), togglePin: { vpn.togglePin(c.code) }) {
                 vpn.disconnect()
             }
@@ -248,12 +350,14 @@ struct Panel: View {
                 serverRows(cities[0], in: c)
             } else {
                 ForEach(cities) { city in
-                    CityRow(city: city, state: vpn.isActive(code: c.code, city: city.city) ? vpn.activeState : nil,
+                    CityRow(city: city, highlighted: selection == .city(c.code, city.city),
+                            state: vpn.isActive(code: c.code, city: city.city) ? vpn.activeState : nil,
                             expanded: expandedCity == city.city, toggleExpanded: {
                         expandedCity = expandedCity == city.city ? nil : city.city
                     }) {
                         vpn.connect(city: city.city, in: c, picked: true)
                     }
+                    .id(ListItem.city(c.code, city.city))
                     if expandedCity == city.city {
                         serverRows(city, in: c).padding(.leading, 16)
                     }
@@ -267,16 +371,18 @@ struct Panel: View {
     @ViewBuilder func serverRows(_ city: City, in c: Country) -> some View {
         ForEach(city.servers) { server in
             ServerRow(server: server, country: c.code,
-                      state: vpn.isActive(code: c.code, server: server.name) ? vpn.activeState : nil) {
+                      state: vpn.isActive(code: c.code, server: server.name) ? vpn.activeState : nil,
+                      highlighted: selection == .server(c.code, server.name)) {
                 vpn.connect(server: server, in: c, picked: true)
             }
+            .id(ListItem.server(c.code, server.name))
         }
     }
 
-    /// The row picked with the arrow keys, if any.
+    /// The country picked with the arrow keys, if any.
     var highlighted: Country? {
-        guard let selection, listed.indices.contains(selection) else { return nil }
-        return listed[selection]
+        guard case .country(let code) = selection else { return nil }
+        return listed.first { $0.code == code }
     }
 
     var listed: [Country] { vpn.listed(query: query) }
