@@ -588,6 +588,11 @@ struct Panel: View {
                         Button("Update Available: \(update.version)…") { vpn.offerUpdate() }
                         Divider()
                     }
+                    if vpn.status.outdatedTools != nil {
+                        // Setup copies Homebrew's newer versions, which needs your password.
+                        Button("Refresh WireGuard Tools…") { vpn.runSetup() }
+                        Divider()
+                    }
                     if let account = vpn.account {
                         Text("\(account.username) (\(account.plan))")
                         Divider()
@@ -607,7 +612,7 @@ struct Panel: View {
                     Image(systemName: "gearshape")
                         .overlay(alignment: .topTrailing) {
                             // An update is waiting.
-                            if vpn.update != nil {
+                            if vpn.update != nil || vpn.status.outdatedTools != nil {
                                 Circle().fill(Color.accentColor).frame(width: 6, height: 6).offset(x: 2, y: -2)
                             }
                         }
@@ -617,7 +622,7 @@ struct Panel: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .tip("Settings")
-                .accessibilityLabel(vpn.update != nil ? "Settings, update available" : "Settings")
+                .accessibilityLabel(vpn.update != nil || vpn.status.outdatedTools != nil ? "Settings, update available" : "Settings")
                 Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
                     .buttonStyle(.plain).pointingHand()
                     .shortcutHint("Q")

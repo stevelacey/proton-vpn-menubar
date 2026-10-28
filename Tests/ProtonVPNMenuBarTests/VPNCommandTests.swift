@@ -19,6 +19,16 @@ import Testing
         #expect(harness.fake.calls.filter { $0 == "list --json" }.count == 1)
     }
 
+    @Test func refreshLoadsOutdatedTools() async {
+        let harness = Harness()
+        harness.fake.respondJSON("status --json", ["state": "Disconnected", "outdated_tools": ["bash"]])
+        harness.fake.respond("settings --json", "", status: 1)
+        harness.fake.respond("list --json", "", status: 1)
+        let vpn = harness.vpn
+        await vpn.refresh()
+        #expect(vpn.status.outdatedTools == ["bash"])
+    }
+
     @Test func refreshWaitsForWhatsInProgressUnlessForced() async {
         let harness = Harness()
         harness.fake.respond("status --json", "not json")

@@ -53,6 +53,12 @@ struct Status: Decodable, Equatable {
     var port: Int?
     var interface: String?
     var load: Int?
+    /// Tools Homebrew has updated since setup copied them for running as root.
+    var outdatedTools: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case state, server, code, country, city, ip, port, interface, load, outdatedTools = "outdated_tools"
+    }
 }
 
 struct Settings: Decodable, Equatable {
