@@ -35,7 +35,7 @@ Proton's Mac app, not alongside it, since it runs its own VPN connection that th
 - 🔄 Updates instantly when you connect from the CLI or Alfred
 - ⌨️ Keyboard friendly: arrow keys through the list, ⌘ shortcuts (hold ⌘ to see them), and global shortcuts to open the panel or quick connect
 - 📋 Click the IP or forwarded port to copy it
-- 🚀 Opens at login and can reconnect on launch
+- 🚀 Opens at login and can connect on launch
 
 ## Install
 
