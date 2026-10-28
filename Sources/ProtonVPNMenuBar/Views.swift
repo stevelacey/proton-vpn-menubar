@@ -954,13 +954,6 @@ struct SignInForm: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            HStack {
-                Spacer()
-                Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
-                    .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
-                    .accessibilityLabel("Quit")
-            }
-            .padding(.bottom, -14)
             VStack(spacing: 6) {
                 Image(nsImage: resource("AppIcon", template: false))
                     .resizable()
@@ -970,18 +963,19 @@ struct SignInForm: View {
                     .font(.title2.weight(.semibold))
                 if isCode {
                     Text("Enter the 6-digit code from your authenticator app, or a recovery code.")
-                        .font(.callout)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.top, 6)
 
-            Text("Unofficial app, not affiliated with Proton AG")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.top, -8)
+            if !isCode {
+                Text("Unofficial app, not affiliated with Proton AG")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, -8)
+            }
 
             if isCode {
                 field("Code") {
@@ -993,10 +987,10 @@ struct SignInForm: View {
                 primaryButton("Continue", disabled: code.isEmpty, action: submitCode)
                 Button("Cancel") { vpn.cancelSignIn() }
                     .buttonStyle(.plain).pointingHand()
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                field("Email or username") {
+                field("Username") {
                     TextField("", text: $username).textContentType(.username)
                 }
                 field("Password") {
@@ -1018,23 +1012,36 @@ struct SignInForm: View {
                 .buttonStyle(.plain).pointingHand()
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .foregroundStyle(Color.accentColor)
-                .font(.callout)
+                // Colored like the links, which it opens.
+                .foregroundStyle(Color(nsColor: .linkColor))
+                .font(.caption)
             }
 
-            Divider()
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "checkmark.shield").foregroundStyle(.secondary).accessibilityHidden(true)
-                Text("Your password is sent to Proton and never stored.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            // Signing up and the password's note are done with by the code step.
+            if !isCode {
+                Divider()
+                VStack(spacing: 6) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "checkmark.shield").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                        Text("Your password is sent to Proton and never stored.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Link("Create a free account", destination: URL(string: "https://account.proton.me/refer-a-friend?plan=vpn2024&referrer=RN5KW5DZ")!)
+                        .font(.caption)
+                }
             }
-            Link("Create a free account", destination: URL(string: "https://account.proton.me/refer-a-friend?plan=vpn2024&referrer=RN5KW5DZ")!)
-                .font(.caption)
         }
         .padding(20)
         .frame(width: 320)
+        // In the corner, rather than a row of its own above the icon.
+        .overlay(alignment: .topTrailing) {
+            Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
+                .buttonStyle(.plain).pointingHand().foregroundStyle(.secondary).tip("Quit")
+                .accessibilityLabel("Quit")
+                .padding(12)
+        }
     }
 
     var isCode: Bool {
