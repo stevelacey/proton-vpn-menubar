@@ -195,7 +195,7 @@ struct NetShieldLevel {
 /// What each server feature is for, in Proton's words, for tooltips.
 let featureTips = [
     "p2p": "P2P: best for BitTorrent and file sharing",
-    "tor": "Tor over VPN: through the Tor network, slower but more private",
+    "tor": "Tor over VPN: slower but more private",
     "streaming": "Streaming: Netflix, Disney+ and more from anywhere",
     "smartrouting": "Smart Routing: a virtual location, served from a nearby country",
 ]
