@@ -604,7 +604,7 @@ struct FeatureCard: View {
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.1)))
                 }
                 if let note = content.note {
                     Text(note)
@@ -844,7 +844,7 @@ struct OptionRow: View {
             // The chosen one is tinted, keeping its text readable.
             .background(RoundedRectangle(cornerRadius: 8).fill(option.selected
                 ? Color.accentColor.opacity(0.25)
-                : Color.primary.opacity(hovering && option.enabled ? 0.1 : 0.05)))
+                : Color.primary.opacity(hovering && option.enabled ? 0.14 : 0.08)))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(option.selected ? Color.accentColor : Color.primary.opacity(0.1)))
             .contentShape(Rectangle())
         }
@@ -905,7 +905,7 @@ struct InstallCLI: View {
                 CopyButton(value: command)
             }
             .padding(8)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.1)))
             Text("Then reopen this app.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
@@ -1014,7 +1014,7 @@ struct SignInForm: View {
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.1)))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
         }
     }
@@ -1098,7 +1098,7 @@ struct ToggleFace: View {
         .frame(maxWidth: .infinity, minHeight: 46)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(on ? Color.accentColor : Color.primary.opacity(hovering ? 0.12 : 0.06))
+                .fill(on ? Color.accentColor : Color.primary.opacity(hovering ? 0.16 : 0.1))
         )
     }
 }
@@ -1138,7 +1138,7 @@ struct ActionButton: View {
         switch style {
         case .primary: return Color.accentColor.opacity(hovering ? 0.85 : 1)
         case .destructive where hovering: return Color(red: 0.85, green: 0.27, blue: 0.33)
-        default: return Color.primary.opacity(hovering ? 0.12 : 0.06)
+        default: return Color.primary.opacity(hovering ? 0.16 : 0.1)
         }
     }
 

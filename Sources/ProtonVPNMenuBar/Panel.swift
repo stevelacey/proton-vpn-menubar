@@ -30,8 +30,8 @@ struct Panel: View {
                 panel
             }
         }
-        // Mostly opaque: the menu bar's glass makes it hard to read over a bright window.
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.9).ignoresSafeArea())
+        // The material real menus use, like other menu bar apps' panels.
+        .background(MenuMaterial().ignoresSafeArea())
     }
 
     var panel: some View {
@@ -342,7 +342,7 @@ struct Panel: View {
             .padding(.leading, 8)
             .padding(.trailing, 4)
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.1)))
             .padding(.bottom, 4)
 
             let list = listed
@@ -675,3 +675,17 @@ struct Panel: View {
 
 }
 
+
+
+/// Behind-window blur with the menu material, which is darker than a MenuBarExtra window's own.
+struct MenuMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .menu
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
