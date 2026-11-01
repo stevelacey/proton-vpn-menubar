@@ -244,15 +244,15 @@ struct CopyDetail: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary)
-                Text(value).fontWeight(.medium).monospacedDigit()
+                Text(label).foregroundStyle(.secondary).fixedSize()
+                // A long one, such as an IPv6 address, loses its middle rather than widening the panel.
+                Text(value).fontWeight(.medium).monospacedDigit().lineLimit(1).truncationMode(.middle)
                 // Always there, so nothing moves when it shows.
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
                     .font(.caption).foregroundStyle(.secondary)
                     .opacity(hovering || focused || copied ? 1 : 0)
             }
             .font(.callout)
-            .fixedSize()
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).pointingHand()

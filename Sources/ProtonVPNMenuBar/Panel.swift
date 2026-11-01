@@ -672,11 +672,11 @@ struct Panel: View {
     @ViewBuilder func detail(_ label: String, _ value: String?) -> some View {
         if let value {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary)
-                Text(value).fontWeight(.medium).monospacedDigit()
+                Text(label).foregroundStyle(.secondary).fixedSize()
+                // A long one, such as an IPv6 address, loses its middle rather than widening the panel.
+                Text(value).fontWeight(.medium).monospacedDigit().lineLimit(1).truncationMode(.middle)
             }
             .font(.callout)
-            .fixedSize()
         }
     }
 
