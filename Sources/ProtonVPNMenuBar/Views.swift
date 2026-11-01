@@ -498,9 +498,9 @@ struct ActiveCountryRow: View {
     // The Alfred workflow is only worth mentioning to people who have Alfred.
     let alfred = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.runningwithcrayons.Alfred") != nil
     let lines: [[NSAttributedString]] = [
-        [text("A small menu bar app for Proton VPN, compatible with the "),
+        [text("A small menu bar app for Proton VPN, based on the "),
          link("Proton VPN CLI for macOS", "https://github.com/stevelacey/proton-vpn-cli-macos"), text(".")],
-        alfred ? [text(" There's also an "), link("Alfred workflow", "https://github.com/stevelacey/alfred-proton-vpn"), text(".")] : [],
+        alfred ? [text("\n\nUse Alfred? Try "), link("Alfred Proton VPN", "https://github.com/stevelacey/alfred-proton-vpn"), text(".")] : [],
         [text("\n\n")],
         [link("Fork on GitHub", "https://github.com/stevelacey/proton-vpn-menubar"), NSAttributedString(string: "  ·  "),
          // UTM tags, so steve.ly's analytics can tell visits from the app apart.
@@ -669,16 +669,12 @@ struct ShortcutsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("These work from any app. In the panel, hold ⌘ to see its own shortcuts.")
+            Text("Use these from any app, without opening the panel first.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            ShortcutRecorder(vpn: vpn, title: "Open the panel", shortcut: $vpn.shortcut)
+            ShortcutRecorder(vpn: vpn, title: "Open or close the panel", shortcut: $vpn.shortcut)
             ShortcutRecorder(vpn: vpn, title: "Quick Connect or Disconnect", shortcut: $vpn.quickShortcut)
-            Text("Use ⌘, ⌥ or ⌃ with a key, so it doesn't get in the way of typing.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(20)
         .frame(width: 320)
@@ -710,6 +706,8 @@ struct ShortcutRecorder: View {
     let title: String
     @Binding var shortcut: Shortcut?
     @State private var monitor: Any?
+    /// A key was pressed without ⌘, ⌥ or ⌃, which would get in the way of typing.
+    @State private var needsModifier = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -718,7 +716,7 @@ struct ShortcutRecorder: View {
                 Button {
                     monitor == nil ? record() : stop()
                 } label: {
-                    Text(monitor != nil ? "Press a shortcut…" : shortcut?.description ?? "Record Shortcut")
+                    Text(monitor == nil ? shortcut?.description ?? "Click to record" : needsModifier ? "Add ⌘, ⌥ or ⌃" : "Press a shortcut…")
                         .font(.body.weight(.medium)).monospacedDigit()
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -750,6 +748,8 @@ struct ShortcutRecorder: View {
                                                characters: event.charactersIgnoringModifiers) {
                 stop()
                 shortcut = recorded
+            } else {
+                needsModifier = true
             }
             return nil
         }
@@ -758,6 +758,7 @@ struct ShortcutRecorder: View {
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        needsModifier = false
         vpn.registerShortcuts()
     }
 }
@@ -893,6 +894,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated {
             if urls.contains(where: { $0.host == "toggle" }) { VPN.shared.togglePanel() }
+        }
+    }
+
+    /// Closes the panel when another app comes to the front, e.g. one whose own panel was opened with a
+    /// shortcut: a click elsewhere closes it, but switching apps from the keyboard doesn't.
+    func applicationDidResignActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            if NSApp.windows.contains(where: { $0.className.contains("MenuBarExtraWindow") && $0.isVisible }) {
+                VPN.shared.closePanelInBackground()
+            }
         }
     }
 
@@ -1238,6 +1249,11 @@ extension VPN {
     /// proton-vpn-menubar://toggle.
     func togglePanel() {
         NSApp.activate(ignoringOtherApps: true)
+        statusButton?.performClick(nil)
+    }
+
+    /// Closes the panel once another app's in front, when there's no key window for closePanel to go by.
+    func closePanelInBackground() {
         statusButton?.performClick(nil)
     }
 
