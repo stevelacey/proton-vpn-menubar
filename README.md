@@ -8,35 +8,31 @@
 [![License](https://img.shields.io/github/license/stevelacey/proton-vpn-menubar?style=flat-square)](LICENSE)
 
 A small menu bar app for Proton VPN on macOS, built on the
-[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos). It does
-what you need from the menu bar and nothing else: no windows, no dock icon.
+[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos).
 
 <img src="menubar-icons.png" alt="The menu bar icon connected in Switzerland, the US, the UK, the Netherlands, Germany, Japan and Sweden" width="500">
 
 <img src="screenshot.png" alt="Screenshot" width="366">
 
 > [!NOTE]
-> Unofficial: made by a fan of Proton VPN, not by or with Proton AG.
+> Unofficial, not affiliated with Proton.
 
-## Better together
+## Related projects
 
 - **[Proton VPN CLI for macOS](https://github.com/stevelacey/proton-vpn-cli-macos)**: `protonvpn` in your terminal
 - **[Alfred Proton VPN](https://github.com/stevelacey/alfred-proton-vpn)**: `vpn swiss` from Alfred
 
-They all drive the same connection: connect from one and the others keep up. Use them instead of
-Proton's Mac app, not alongside it, since it runs its own VPN connection that these can't see or control.
+They share the same connection. Don't run Proton's Mac app at the same time, since it has its own
+connection that these can't see.
 
 ## Features
 
 - ⚡ Fastest and random servers, recent countries and pinned favorites
-- 🔎 Country search, with P2P, Tor and streaming filters
-- 🗺️ Cities and servers with their load, to pick one yourself
+- 🔎 Country search with P2P, Tor and streaming filters
+- 🗺️ Cities and servers, with their load
 - 🔒 Secure Core, NetShield, kill switch and port forwarding
-- 🌐 DNS: Proton's, Cloudflare, Google, OpenDNS or Quad9
-- 🔄 Updates instantly when you connect from the CLI or Alfred
-- ⌨️ Keyboard friendly: arrow keys through the list, ⌘ shortcuts (hold ⌘ to see them), and global shortcuts to open the panel or quick connect
-- 📋 Click the IP or forwarded port to copy it
-- 🚀 Opens at login and can connect on launch
+- 🌐 Proton, Cloudflare, Google, OpenDNS or Quad9 DNS
+- ⌨️ Keyboard shortcuts (hold ⌘) and global hotkeys
 
 ## Install
 
